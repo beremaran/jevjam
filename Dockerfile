@@ -1,12 +1,11 @@
-# NVIDIA CUDA runtime plus the CUDA 12.8 PyTorch wheels used by Laya.
-FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+# Slim Python base: the CUDA 12.8 PyTorch wheels carry their own CUDA
+# libraries, and the NVIDIA Container Toolkit injects the driver at run time.
+FROM python:3.12-slim-bookworm
 
-ARG DEBIAN_FRONTEND=noninteractive
 ARG TORCH_VERSION=2.11.0
 ARG LAYA_VERSION=0.3.20
 
-ENV PATH="/opt/venv/bin:$PATH" \
-    PYTHONUNBUFFERED=1 \
+ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -20,14 +19,6 @@ ENV PATH="/opt/venv/bin:$PATH" \
     HF_HOME=/models \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        python3 \
-        python3-venv \
-    && rm -rf /var/lib/apt/lists/* \
-    && python3 -m venv /opt/venv
 
 # Install PyTorch from the CUDA wheel index first so pip cannot silently select
 # a CPU-only build while resolving Laya's torch dependency.

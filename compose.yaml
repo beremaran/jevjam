@@ -1,0 +1,44 @@
+# Example Compose file for the Laya Jev-compatible HTTP server.
+#
+#   docker compose up --build -d      # build if needed, start detached
+#   docker compose logs -f laya       # follow startup and request logs
+#   curl http://127.0.0.1:8000/health
+#   docker compose down               # stop; the model cache survives
+#
+# Requires an NVIDIA GPU with a working driver and the NVIDIA Container
+# Toolkit. See README.md for details and the API reference.
+services:
+  laya:
+    build: .
+    image: berkelaya:latest
+    init: true
+    restart: unless-stopped
+    ports:
+      # Published on loopback only: the API has no authentication until
+      # LAYA_API_KEY is set, so do not expose it to the network as-is.
+      - "127.0.0.1:${LAYA_PORT:-8000}:${LAYA_PORT:-8000}"
+    environment:
+      # One value drives both the port the server binds and the published
+      # host port above, so the two cannot drift apart.
+      LAYA_PORT: "${LAYA_PORT:-8000}"
+      # Comma list to preload: english,multilingual,typed-decisions.
+      # Empty means every checkpoint (the image default). Narrow it to save
+      # VRAM and first-boot download time, e.g. LAYA_MODELS=english.
+      LAYA_MODELS: "${LAYA_MODELS:-}"
+      # When set, every request must send `Authorization: Bearer <key>`.
+      LAYA_API_KEY: "${LAYA_API_KEY:-}"
+      # Optional Hugging Face token for higher download rate limits.
+      HF_TOKEN: "${HF_TOKEN:-}"
+    volumes:
+      # Checkpoints are downloaded once and reused across recreations.
+      - models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  models:
