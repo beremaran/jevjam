@@ -134,6 +134,108 @@ request are answered in a single forward pass.
 probability of the chosen option. `action.act_probability` is present but carries no
 usable signal today.
 
+#### JSON Schema
+
+The server does not require a schema, but request bodies can be validated against this
+[JSON Schema](https://json-schema.org/) (draft 2020-12). Save it next to your client
+code and run it through any validator, or use it for code generation:
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Laya POST /v1/systemone request",
+  "type": "object",
+  "required": ["state", "questions"],
+  "properties": {
+    "state": {
+      "description": "The text or JSON object to decide on.",
+      "oneOf": [{"type": "string"}, {"type": "object"}]
+    },
+    "model": {
+      "description": "Optional checkpoint override; unknown values are ignored and the router auto-selects.",
+      "enum": [
+        "english",
+        "multilingual",
+        "typed-decisions",
+        "convaiinnovations/laya-multilingual",
+        "convaiinnovations/laya-typed-decisions"
+      ]
+    },
+    "questions": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 64,
+      "additionalProperties": {"$ref": "#/$defs/question"}
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "question": {
+      "oneOf": [
+        {"$ref": "#/$defs/choice"},
+        {"$ref": "#/$defs/score"},
+        {"$ref": "#/$defs/noul"}
+      ]
+    },
+    "choice": {
+      "type": "object",
+      "required": ["type", "instructions", "criteria"],
+      "properties": {
+        "type": {"const": "choice"},
+        "instructions": {"type": "string"},
+        "criteria": {
+          "oneOf": [
+            {"type": "object", "additionalProperties": {"type": "string"}},
+            {"type": "array", "items": {"type": "string"}}
+          ]
+        }
+      }
+    },
+    "score": {
+      "type": "object",
+      "required": ["type", "instructions", "criteria"],
+      "properties": {
+        "type": {"const": "score"},
+        "instructions": {"type": "string"},
+        "criteria": {
+          "description": "Levels ordered low to high.",
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "noul": {
+      "type": "object",
+      "required": ["type", "instructions"],
+      "properties": {
+        "type": {"const": "noul"},
+        "instructions": {"type": "string"},
+        "criteria": {
+          "description": "Optional model-facing option text, keyed exactly true/false.",
+          "type": "object",
+          "required": ["true", "false"],
+          "properties": {"true": {"type": "string"}, "false": {"type": "string"}},
+          "additionalProperties": false
+        },
+        "labels": {
+          "description": "Optional model-facing labels, keyed exactly true/false.",
+          "type": "object",
+          "required": ["true", "false"],
+          "properties": {"true": {"type": "string"}, "false": {"type": "string"}},
+          "additionalProperties": false
+        }
+      }
+    }
+  }
+}
+```
+
+For example, with [`check-jsonschema`](https://github.com/python-jsonschema/check-jsonschema):
+
+```bash
+check-jsonschema --schemafile systemone-request.schema.json request.json
+```
+
 #### Example
 
 ```bash
