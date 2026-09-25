@@ -56,6 +56,15 @@ docker run -d --name laya --gpus all \
   berkelaya:latest
 ```
 
+If you would rather not build locally, CI publishes the image to GitHub Container
+Registry on every push to `main`:
+
+```bash
+docker pull ghcr.io/beremaran/laya-docker:latest
+docker run -d --name laya --gpus all -p 127.0.0.1:8000:8000 \
+  -v laya-models:/models ghcr.io/beremaran/laya-docker:latest
+```
+
 Check GPU access without downloading any checkpoint:
 
 ```bash
