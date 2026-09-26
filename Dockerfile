@@ -50,14 +50,12 @@ RUN uv sync --frozen --no-dev --no-editable \
 EXPOSE 8000
 
 # Set LAYA_API_KEY at run time before publishing the port beyond localhost. No
-# checkpoint is resident until the first request, so a healthy container means the
-# port is answering, not that a model is loaded.
+# checkpoint is resident until the first request, so health means both endpoints
+# answer, not that a model is loaded.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c 'import os, urllib.request; urllib.request.urlopen("http://127.0.0.1:" + os.environ.get("LAYA_PORT", "8000") + "/health", timeout=4)'
+    CMD python -c 'import json, os, urllib.request; response = urllib.request.urlopen("http://127.0.0.1:" + os.environ.get("LAYA_PORT", "8000") + "/health", timeout=4); assert json.load(response)["mcp_ready"] is True'
 
 # laya-idle-serve is laya-serve without the preload: checkpoints are downloaded and
-# built by the first request, then freed again after LAYA_IDLE_TIMEOUT quiet seconds.
-# laya-idle-mcp is the same server as an MCP endpoint on the same port; the Compose
-# example runs it as a second container and publishes it on 8001, because the two
-# cannot share one process or one GPU allocation.
+# built by the first request, then freed after LAYA_IDLE_TIMEOUT seconds without an
+# inference request on either the Jev-compatible HTTP API or the MCP endpoint.
 CMD ["uv", "run", "--no-sync", "--frozen", "laya-idle-serve"]

@@ -247,7 +247,9 @@ def test_a_request_reaches_the_router_and_stamps_the_clock():
     assert len(router.hooks) == 1, "the wrapper installs exactly one hook"
 
     with TestClient(app) as client:
-        assert client.get("/health").json() == {"status": "ok", "loaded": [], "device": "auto"}
+        assert client.get("/health").json() == {
+            "status": "ok", "loaded": [], "device": "auto", "mcp_ready": True,
+        }
         assert idle.last_activity is None, "a health probe must not keep the checkpoints"
 
         answer = client.post("/v1/systemone", json={

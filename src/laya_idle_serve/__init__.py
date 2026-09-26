@@ -1,4 +1,4 @@
-"""Laya's Jev-compatible HTTP server, with the checkpoints freed when it goes idle.
+"""Laya's HTTP and MCP servers, with checkpoints freed when they go idle.
 
 `laya-serve` loads the checkpoints at boot and then holds them for the life of the
 process. That is the wrong shape for a server that sits unused between bursts: the
@@ -188,13 +188,17 @@ class IdleHook:
 
 
 def build_app(router=None, timeout=None, max_loaded=None):
-    """The ASGI app, the router behind it, and the watcher that frees it.
+    """The HTTP and MCP ASGI app, its shared router, and its idle watcher.
 
     Every argument defaults to the environment, and `router` can be handed in so a
-    test can drive the whole request path with a stand-in. Returns the three pieces
-    because the caller owns the watcher's lifetime.
+    test can drive both endpoints with a stand-in. The app's lifespan owns the MCP
+    session manager and watcher; the returned watcher is exposed for tests and status.
     """
+    from contextlib import asynccontextmanager
+    from fastapi.responses import JSONResponse
     from laya.serve import create_app
+    from laya.mcp import server as laya_mcp
+    from mcp.server.transport_security import TransportSecuritySettings
 
     if max_loaded is None:
         max_loaded = read_max_loaded()
@@ -204,7 +208,64 @@ def build_app(router=None, timeout=None, max_loaded=None):
         router = build_router(max_loaded)
     unloader = IdleUnloader(router, timeout)
     router.add_hook(IdleHook(unloader))
-    return create_app(router), router, unloader
+
+    # Laya's MCP tools use this module global. Do not let a missed assignment fall
+    # back to laya's lazy builder: that would create a second Router outside the
+    # idle watcher and could load another copy of a checkpoint into VRAM.
+    laya_mcp._ROUTER = router
+
+    def require_shared_router():
+        if laya_mcp._ROUTER is None:
+            raise laya_mcp.ToolError("internal_error", "the shared router is not configured")
+        return laya_mcp._ROUTER
+
+    laya_mcp._ensure_router = require_shared_router
+    laya_mcp.server.settings.log_level = os.environ.get("LAYA_LOG_LEVEL", "info").upper()
+
+    mcp_app = laya_mcp.server.streamable_http_app(
+        json_response=True,
+        stateless_http=True,
+        # MCP SDK defaults to localhost-only Host checks. The top-level server is
+        # loopback-bound by Compose; keep the endpoint usable through proxy hosts too.
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
+    session_manager = laya_mcp.server.session_manager
+
+    app = create_app(router)
+    app.state.mcp_ready = False
+
+    # Keep laya's health fields while adding readiness for the mounted MCP service.
+    @app.middleware("http")
+    async def add_mcp_readiness(request, call_next):
+        if request.method == "GET" and request.url.path == "/health":
+            return JSONResponse({
+                "status": "ok",
+                "loaded": router.loaded,
+                "device": os.environ.get("LAYA_DEVICE") or "auto",
+                "mcp_ready": app.state.mcp_ready,
+            })
+        return await call_next(request)
+
+    app.mount("/", mcp_app)
+    http_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def combined_lifespan(application):
+        try:
+            async with session_manager.run():
+                async with http_lifespan(application):
+                    unloader.start()
+                    application.state.mcp_ready = True
+                    try:
+                        yield
+                    finally:
+                        application.state.mcp_ready = False
+                        unloader.stop()
+        finally:
+            application.state.mcp_ready = False
+
+    app.router.lifespan_context = combined_lifespan
+    return app, router, unloader
 
 
 def main():
@@ -218,19 +279,13 @@ def main():
     log.setLevel(getattr(logging, os.environ.get("LAYA_LOG_LEVEL", "info").upper(), logging.INFO))
     warn_dead_env()
 
-    app, _router, unloader = build_app()
-    unloader.start()
-    try:
-        uvicorn.run(
-            app,
-            host=os.environ.get("LAYA_HOST", "0.0.0.0"),
-            port=_resolve_port(),
-            log_level=os.environ.get("LAYA_LOG_LEVEL", "info"),
-        )
-    finally:
-        # No unload on the way out: the process dying hands the memory back anyway,
-        # and collecting first would only make the exit slower.
-        unloader.stop()
+    app, _router, _unloader = build_app()
+    uvicorn.run(
+        app,
+        host=os.environ.get("LAYA_HOST", "0.0.0.0"),
+        port=_resolve_port(),
+        log_level=os.environ.get("LAYA_LOG_LEVEL", "info"),
+    )
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-# Example Compose file for the Laya Jev-compatible HTTP server and its MCP sibling.
+# Example Compose file for the Laya HTTP API and MCP endpoint.
 #
 #   docker compose pull               # fetch the published image instead of building
 #   docker compose up --build -d      # build if needed, start detached
@@ -6,9 +6,8 @@
 #   curl http://127.0.0.1:8000/health
 #   docker compose down               # stop; the model cache survives
 #
-# Both services come from one image and one model cache. Each builds its own Router,
-# so each holds its own copy of a checkpoint in GPU memory; see README.md for the
-# levers (LAYA_IDLE_TIMEOUT, LAYA_MAX_LOADED) if VRAM is tight.
+# The API and MCP endpoint share one process, Router, and model copy in GPU memory.
+# See README.md for the LAYA_IDLE_TIMEOUT and LAYA_MAX_LOADED settings.
 #
 # Requires an NVIDIA GPU with a working driver and the NVIDIA Container
 # Toolkit. See README.md for details and the API reference.
@@ -19,8 +18,8 @@ services:
     init: true
     restart: unless-stopped
     ports:
-      # Published on loopback only: the API has no authentication until
-      # LAYA_API_KEY is set, so do not expose it to the network as-is.
+      # Both endpoints are published on loopback only. LAYA_API_KEY protects the API,
+      # but not MCP, so do not expose this port to the network as-is.
       - "127.0.0.1:${LAYA_PORT:-8000}:${LAYA_PORT:-8000}"
     environment:
       # One value drives both the port the server binds and the published
@@ -38,41 +37,6 @@ services:
     volumes:
       # Checkpoints are downloaded once and reused across recreations.
       - models:/models
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
-  laya-mcp:
-    build: .
-    image: ghcr.io/beremaran/laya-docker:latest
-    init: true
-    restart: unless-stopped
-    # The image serves the HTTP app by default; this is the MCP entry point.
-    command: ["uv", "run", "--no-sync", "--frozen", "laya-idle-mcp"]
-    ports:
-      # Loopback only as well: the MCP endpoint refuses nothing, and the only
-      # thing between it and the network is this binding.
-      - "127.0.0.1:${LAYA_MCP_PORT:-8001}:8000"
-    environment:
-      # Same two levers as above, applied to this container's own checkpoints.
-      LAYA_IDLE_TIMEOUT: "${LAYA_IDLE_TIMEOUT:-}"
-      LAYA_MAX_LOADED: "${LAYA_MAX_LOADED:-}"
-      # Optional Hugging Face token for higher download rate limits.
-      HF_TOKEN: "${HF_TOKEN:-}"
-    volumes:
-      # Shared with the service above: the cache is keyed by checkpoint, and the Hub
-      # client locks and renames into place, so a first boot that downloads in both
-      # at once wastes bandwidth rather than corrupting anything.
-      - models:/models
-    healthcheck:
-      # The image's healthcheck probes the HTTP /health route, which this process
-      # does not serve. Without speaking MCP there is nothing to ask but the port,
-      # which is exactly what is worth knowing: it opens before any checkpoint does.
-      test: ["CMD", "python", "-c", "import os, socket; socket.create_connection(('127.0.0.1', os.environ.get('LAYA_PORT', '8000')), timeout=4)"]
     deploy:
       resources:
         reservations:

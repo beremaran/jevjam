@@ -1,19 +1,19 @@
-"""Tests for the MCP server.
+"""Tests for the MCP endpoint.
 
 Same ground rules as the HTTP tests: no GPU, no checkpoint download, no call to the
-Hub. The tools are called directly rather than over a socket, because
-`laya.mcp.server` registers them with `@server.tool` and the decorator hands the
-function back unchanged, so `laya_predict_tool(...)` is the tool the MCP client would
-reach. `import laya.mcp.server` pulls no torch, so none of this needs CUDA.
+Hub. Most tests call the registered tool functions directly; the integration test
+also sends a streamable-HTTP tools/call request through `/mcp`. `import
+laya.mcp.server` pulls no torch, so none of this needs CUDA.
 """
 import asyncio
+import json
 
 import pytest
+from fastapi.testclient import TestClient
 from laya.mcp import server as laya_mcp
 from test_idle_serve import MANAGED_ENV, StubRouter, wait_for
 
-from laya_idle_serve import DEFAULT_IDLE_TIMEOUT, IdleUnloader
-from laya_idle_serve.mcp_server import build_mcp_server
+from laya_idle_serve import DEFAULT_IDLE_TIMEOUT, IdleUnloader, build_app
 
 QUESTIONS = {"billing": {"type": "noul", "instructions": "Is this about billing?"}}
 STATE = {"body": "I was charged twice"}
@@ -36,7 +36,7 @@ def test_the_four_tools_are_registered():
 
 def test_a_predict_call_reaches_our_router_and_stamps_the_clock():
     router = StubRouter()
-    _server, built, idle = build_mcp_server(router=router, timeout=60, max_loaded=1)
+    _app, built, idle = build_app(router=router, timeout=60, max_loaded=1)
     assert built is router, "the tools and the watcher must share one router"
     assert len(router.hooks) == 1, "the wrapper installs exactly one hook"
 
@@ -53,7 +53,7 @@ def test_a_preset_call_stamps_the_clock_too():
     # laya_preset runs its forward pass through laya_predict, so it is the second
     # door into Router.predict and the one most likely to be forgotten.
     router = StubRouter()
-    _server, _built, idle = build_mcp_server(router=router, timeout=60)
+    _app, _built, idle = build_app(router=router, timeout=60)
     laya_mcp.laya_preset_tool(preset="triage", state=STATE)
     assert router.loads == ["english"]
     assert idle.last_activity is not None
@@ -61,7 +61,7 @@ def test_a_preset_call_stamps_the_clock_too():
 
 def test_a_failed_call_still_counts_as_activity():
     router = StubRouter(fail=True)
-    _server, _built, idle = build_mcp_server(router=router, timeout=60)
+    _app, _built, idle = build_app(router=router, timeout=60)
     with pytest.raises(laya_mcp.McpToolError):
         laya_mcp.laya_predict_tool(state=STATE, questions=QUESTIONS)
     assert idle.last_activity is not None, "traffic is traffic, even when it fails"
@@ -69,7 +69,7 @@ def test_a_failed_call_still_counts_as_activity():
 
 def test_status_reports_the_shared_router_and_a_cold_start():
     router = StubRouter()
-    _server, _built, _idle = build_mcp_server(router=router, timeout=60)
+    _app, _built, _idle = build_app(router=router, timeout=60)
     status = laya_mcp.laya_status_tool()
     assert '"router_ready": true' in status
     assert '"loaded": []' in status, "nothing is resident until a tool asks for something"
@@ -77,7 +77,7 @@ def test_status_reports_the_shared_router_and_a_cold_start():
 
 def test_a_route_call_alone_does_not_pull_in_a_checkpoint():
     router = StubRouter()
-    build_mcp_server(router=router, timeout=60)
+    _app, _built, _idle = build_app(router=router, timeout=60)
     laya_mcp.laya_route_tool(state=STATE, questions=QUESTIONS)
     assert router.loads == [], "laya_route promises no forward pass"
 
@@ -85,17 +85,17 @@ def test_a_route_call_alone_does_not_pull_in_a_checkpoint():
 def test_the_idle_timeout_and_cap_come_from_the_environment(monkeypatch):
     monkeypatch.setenv("LAYA_IDLE_TIMEOUT", "7")
     monkeypatch.setenv("LAYA_MAX_LOADED", "1")
-    _server, _router, idle = build_mcp_server(router=StubRouter())
+    _app, _router, idle = build_app(router=StubRouter())
     assert idle._timeout == 7, "the MCP server obeys the same clock as the HTTP one"
 
     monkeypatch.delenv("LAYA_IDLE_TIMEOUT")
-    assert build_mcp_server(router=StubRouter())[2]._timeout == float(DEFAULT_IDLE_TIMEOUT)
+    assert build_app(router=StubRouter())[2]._timeout == float(DEFAULT_IDLE_TIMEOUT)
 
 
 # -------------------------------------------------------------------------- watching
 def test_the_checkpoints_are_freed_after_the_idle_window():
     router = StubRouter()
-    _server, _built, idle = build_mcp_server(router=router, timeout=1)
+    _app, _built, idle = build_app(router=router, timeout=1)
     assert isinstance(idle, IdleUnloader)
     idle.start()
     try:
@@ -109,5 +109,58 @@ def test_the_checkpoints_are_freed_after_the_idle_window():
 
 def test_a_cold_server_holds_nothing_before_the_first_call():
     router = StubRouter()
-    _server, _built, _idle = build_mcp_server(router=router, timeout=1)
+    _app, _built, _idle = build_app(router=router, timeout=1)
     assert router.loaded == [], "no preload, same as the HTTP server"
+
+
+def test_the_api_and_mcp_tools_share_one_router_and_idle_clock():
+    router = StubRouter()
+    app, built, idle = build_app(router=router, timeout=60, max_loaded=1)
+    assert built is router
+    assert laya_mcp._ROUTER is router
+
+    with TestClient(app) as client:
+        assert client.get("/health").json() == {
+            "status": "ok",
+            "loaded": [],
+            "device": "auto",
+            "mcp_ready": True,
+        }
+        api_response = client.post(
+            "/v1/systemone",
+            json={"state": STATE, "questions": QUESTIONS},
+        )
+        assert api_response.status_code == 200, api_response.text
+        assert router.loads == ["english"]
+        assert idle.last_activity is not None
+
+        response = client.post(
+            "/mcp",
+            headers={"accept": "application/json"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "laya_predict",
+                    "arguments": {"state": STATE, "questions": QUESTIONS},
+                },
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        result_text = response.json()["result"]["content"][0]["text"]
+        assert "answers" in json.loads(result_text)
+        assert router.loads == ["english", "english"]
+        assert idle.last_activity is not None
+
+
+def test_a_missing_shared_router_fails_instead_of_building_another():
+    router = StubRouter()
+    build_app(router=router, timeout=60)
+    laya_mcp._ROUTER = None
+
+    with pytest.raises(laya_mcp.McpToolError, match="shared router is not configured"):
+        laya_mcp.laya_predict_tool(state=STATE, questions=QUESTIONS)
+
+    assert router.loads == []
