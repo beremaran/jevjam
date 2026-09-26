@@ -1,5 +1,6 @@
 # Example Compose file for the Laya Jev-compatible HTTP server.
 #
+#   docker compose pull               # fetch the published image instead of building
 #   docker compose up --build -d      # build if needed, start detached
 #   docker compose logs -f laya       # follow startup and request logs
 #   curl http://127.0.0.1:8000/health
@@ -10,7 +11,7 @@
 services:
   laya:
     build: .
-    image: berkelaya:latest
+    image: ghcr.io/beremaran/laya-docker:latest
     init: true
     restart: unless-stopped
     ports:
