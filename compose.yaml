@@ -22,10 +22,11 @@ services:
       # One value drives both the port the server binds and the published
       # host port above, so the two cannot drift apart.
       LAYA_PORT: "${LAYA_PORT:-8000}"
-      # Comma list to preload: english,multilingual,typed-decisions.
-      # Empty means every checkpoint (the image default). Narrow it to save
-      # VRAM and first-boot download time, e.g. LAYA_MODELS=english.
-      LAYA_MODELS: "${LAYA_MODELS:-}"
+      # Seconds without an inference request before the checkpoints are freed.
+      # 0 keeps them resident; unset uses the built-in 300.
+      LAYA_IDLE_TIMEOUT: "${LAYA_IDLE_TIMEOUT:-}"
+      # How many checkpoints may stay resident while the server is awake.
+      LAYA_MAX_LOADED: "${LAYA_MAX_LOADED:-}"
       # When set, every request must send `Authorization: Bearer <key>`.
       LAYA_API_KEY: "${LAYA_API_KEY:-}"
       # Optional Hugging Face token for higher download rate limits.

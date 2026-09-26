@@ -1,0 +1,7 @@
+# A local .venv is 12 GB of the wrong thing in a build context.
+.git
+.github
+.idea
+.venv
+**/__pycache__
+*.egg-info
