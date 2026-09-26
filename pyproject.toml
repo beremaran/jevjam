@@ -1,7 +1,7 @@
 [project]
 name = "laya-idle-serve"
 version = "0.1.0"
-description = "Laya's Jev-compatible HTTP server, with the checkpoints freed when it goes idle"
+description = "Laya's Jev-compatible HTTP and MCP server, with idle checkpoint unloading"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
