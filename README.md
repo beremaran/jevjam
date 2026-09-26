@@ -445,8 +445,9 @@ curl -s http://127.0.0.1:8000/v1/systemone \
 | Question validation error; the message names the question and the fix | `422` |
 | Inference failure (OOM and similar) | `500` |
 
-Inference runs one request at a time (one worker), so put several questions in one
-request rather than calling in parallel.
+The HTTP API runs one inference at a time through its own worker. MCP calls do not use
+that queue and may overlap with API or other MCP inferences. Combine related questions
+in one call and avoid sending many MCP predictions at once if GPU memory is tight.
 
 ## Notes on the model
 

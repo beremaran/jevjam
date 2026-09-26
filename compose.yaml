@@ -30,7 +30,7 @@ services:
       LAYA_IDLE_TIMEOUT: "${LAYA_IDLE_TIMEOUT:-}"
       # How many checkpoints may stay resident while the server is awake.
       LAYA_MAX_LOADED: "${LAYA_MAX_LOADED:-}"
-      # When set, every request must send `Authorization: Bearer <key>`.
+      # When set, HTTP API requests must send `Authorization: Bearer <key>`; MCP is not covered.
       LAYA_API_KEY: "${LAYA_API_KEY:-}"
       # Optional Hugging Face token for higher download rate limits.
       HF_TOKEN: "${HF_TOKEN:-}"
