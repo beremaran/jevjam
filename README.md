@@ -3,14 +3,18 @@
 This repository builds and runs [Laya](https://huggingface.co/convaiinnovations/laya)
 as a GPU-backed HTTP server that answers typed decision questions on the same
 `POST /v1/systemone` protocol as TypeSafe Jev. A client written against Jev only needs
-its base URL changed; the request and response shapes already match.
+its base URL changed; the request and response shapes already match. The same
+checkpoints are also served as [MCP](https://modelcontextprotocol.io) tools for agents
+that would rather call tools than HTTP.
 
 What the image does:
 
-- Installs `laya[serve]` (0.3.20) with CUDA 12.8 PyTorch wheels on `python:3.12-slim-bookworm`.
-- Runs `laya-serve` as non-root UID 10001, listening on `0.0.0.0:8000`.
+- Installs `laya[serve,mcp]` (0.3.20) with CUDA 12.8 PyTorch wheels on `python:3.12-slim-bookworm`, through uv and a committed `uv.lock`.
+- Runs laya's HTTP app through a wrapper that adds the idle sleeping, as non-root UID 10001, listening on `0.0.0.0:8000`.
+- Ships `laya-idle-mcp`, the same wrapper around laya's MCP tools, served over streamable HTTP at `/mcp`.
+- Downloads no checkpoint at boot. The first request builds the one it routes to, and every checkpoint is freed again after `LAYA_IDLE_TIMEOUT` seconds of silence, on either endpoint.
 - Caches downloaded checkpoints in `/models` (`HF_HOME`), designed to sit on a Docker volume.
-- Ships a `/health` healthcheck that turns healthy only after checkpoints are preloaded.
+- Ships a `/health` healthcheck that reports the port is answering and which checkpoints are resident.
 
 ## Requirements
 
@@ -18,9 +22,14 @@ What the image does:
 - An NVIDIA GPU with a working driver, and the
   [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
   so containers can access it.
-- Disk and VRAM for the checkpoints you preload. All three are ~1.2B parameters total.
+- Disk and VRAM for the checkpoints you use. All three are ~1.2B parameters total, and
+  the server holds at most `LAYA_MAX_LOADED` of them at a time. The MCP server is a
+  second process with its own checkpoints, so running both means two copies; see
+  [MCP server](#mcp-server).
 
-Verified on an RTX 4070 Ti SUPER (driver 615.71.09) with `torch 2.11.0+cu128`.
+Verified on an RTX 4070 Ti SUPER (driver 615.71.09) with `torch 2.11.0+cu128`. There,
+a warm request answers in 31 ms, sleeping hands back about 2.5 GB of the 16 GB card, and
+the request that wakes it costs 0.6 s to rebuild the checkpoint.
 
 ## Quick start (Compose)
 
@@ -30,11 +39,25 @@ docker compose logs -f laya
 curl -s http://127.0.0.1:8000/health
 ```
 
-The first boot downloads the preloaded checkpoints before the server starts listening,
-so `/health` can take minutes to answer. Once it does:
+The port opens in about a second, and no checkpoint is resident yet, so `/health`
+answers straight away:
 
 ```json
-{"status": "ok", "loaded": ["english", "multilingual", "typed-decisions"], "device": "cuda"}
+{"status": "ok", "loaded": [], "device": "cuda"}
+```
+
+An empty `loaded` is the cold state, not a fault. The first inference request builds
+the checkpoint it routes to, which on a volume that has never been populated means
+downloading it first and takes minutes. Follow it with `docker compose logs -f laya`,
+and give the client a timeout that allows for it.
+
+Compose also starts `laya-mcp`, the same checkpoints as MCP tools on
+`http://127.0.0.1:8001/mcp`. It is a separate container and behaves the same way: cold
+at boot, builds what it needs, frees it when idle. If you only want one of the two:
+
+```bash
+docker compose up -d laya       # HTTP only
+docker compose up -d laya-mcp   # MCP only
 ```
 
 Stop and start without redownloading:
@@ -65,6 +88,16 @@ docker run -d --name laya --gpus all -p 127.0.0.1:8000:8000 \
   -v laya-models:/models ghcr.io/beremaran/laya-docker:latest
 ```
 
+Or the MCP endpoint from the same image and cache, on 8001 (the command override is
+what selects it; details in [MCP server](#mcp-server)):
+
+```bash
+docker run -d --name laya-mcp --gpus all --no-healthcheck \
+  -p 127.0.0.1:8001:8000 -v laya-models:/models \
+  ghcr.io/beremaran/laya-docker:latest \
+  uv run --no-sync --frozen laya-idle-mcp
+```
+
 Check GPU access without downloading any checkpoint:
 
 ```bash
@@ -87,22 +120,117 @@ All configuration is by environment variable. Defaults shown are what the image 
 | --- | --- | --- |
 | `LAYA_HOST` | `0.0.0.0` | Bind address inside the container. |
 | `LAYA_PORT` | `8000` | Bind port. Compose publishes this same value on the host. |
+| `LAYA_MCP_PORT` | `8001` | Host port Compose publishes the MCP endpoint on. Compose only; the container always binds `LAYA_PORT`. |
 | `LAYA_DEVICE` | `cuda` | Torch device. Falls back to CPU with a warning if CUDA is unavailable. |
-| `LAYA_PRELOAD` | `1` | Build preloaded checkpoints at startup instead of on first request. |
-| `LAYA_MODELS` | all | Comma list to preload: `english,multilingual,typed-decisions`. Narrow it to save VRAM and download time, e.g. `english`. |
+| `LAYA_IDLE_TIMEOUT` | `300` | Seconds without an inference request before every checkpoint is freed. `0` keeps them resident. Must be a whole number; anything else stops the server at startup. |
+| `LAYA_MAX_LOADED` | `2` | Checkpoints that may stay resident while the server is awake; past this the least recently used one is dropped. Must be a whole number of 1 or more. |
 | `LAYA_AUTO_TASK` | `0` | `1` lets the router reach `typed-decisions` automatically. |
 | `LAYA_THREADS` | torch default | Caps torch intra-op threads for CPU inference; keep at or below physical cores. |
 | `LAYA_API_KEY` | unset | When set, requests must send `Authorization: Bearer <key>`. |
-| `LAYA_LOG_LEVEL` | `info` | Uvicorn log level. |
+| `LAYA_LOG_LEVEL` | `info` | Uvicorn log level, and the level of this server's own log lines. |
 | `HF_HOME` | `/models` | Checkpoint cache location. Mount a volume here. |
 | `HF_TOKEN` | unset | Optional Hugging Face credential. |
 | `HF_HUB_OFFLINE` | `0` | `1` uses only cached checkpoints. |
 
-For example, to serve English only and require a key:
+`LAYA_PRELOAD` and `LAYA_MODELS` used to choose what to load at boot. They no longer
+do anything, because there is no boot load; setting either logs a warning and is
+otherwise ignored.
+
+For example, to keep the checkpoints resident for a server under steady load, and to
+require a key:
 
 ```bash
-LAYA_MODELS=english LAYA_API_KEY=secret docker compose up -d
+LAYA_IDLE_TIMEOUT=0 LAYA_API_KEY=secret docker compose up -d
 ```
+
+## Sleeping on idle
+
+The server never preloads. The first inference request builds the checkpoint it routes
+to, and `LAYA_IDLE_TIMEOUT` seconds after the last request that reached the router,
+every checkpoint is freed: the models go, the garbage collector runs, and the CUDA
+caching allocator hands its blocks back to the driver. A server under load stays warm;
+a server nobody calls stops holding GPU memory. `GET /health` reports this in the
+`loaded` list, with no extra field to learn: a cold server and a sleeping one both
+answer `{"status": "ok", "loaded": [], "device": "cuda"}`, and an awake one lists
+what it is holding.
+
+Waking costs one checkpoint build, not three, because a request loads only what it
+routes to. Measured on an RTX 4070 Ti SUPER from a warm volume, that build is 0.6 s, and
+a warm request that does not need one answers in 31 ms. Measure it on your own GPU before
+setting a client timeout; laya's published numbers are 7.4 s on CPU and 10.3 s on a T4.
+
+```bash
+docker compose exec laya uv run --no-sync python -c \
+  'import time; from laya import Router; r = Router(device="cuda"); r.load("english"); \
+   t = time.perf_counter(); r.unload(); r.load("english"); print("%.1fs" % (time.perf_counter() - t))'
+```
+
+Two other things worth knowing. `LAYA_MAX_LOADED=1` holds only the checkpoint the last
+request routed to, which frees more but pays a rebuild on every language switch. And
+freeing the checkpoints does not release the CUDA context or the memory torch itself
+holds: only letting the container stop does that, and nothing inside the image can
+wake it up again on the next request.
+
+## MCP server
+
+The same checkpoints are available as [MCP](https://modelcontextprotocol.io) tools, so an
+agent can ask typed questions without glue code. The image ships `laya-idle-mcp`: laya's
+own MCP tool layer, served over streamable HTTP, on the sleep-on-idle wrapper. The choice
+of HTTP over stdio is the wrapper's, not a preference: laya's `laya-mcp-server` speaks
+stdio, which ties the process to a client and holds its checkpoints for as long as that
+client runs, and this image exists to stop holding them.
+
+Compose starts it as `laya-mcp`, published on `127.0.0.1:8001`, serving `/mcp`. Four
+tools:
+
+| Tool | What it does |
+| --- | --- |
+| `laya_predict` | Answer typed questions (`choice` / `score` / `noul`) over a state in one forward pass. Like `POST /v1/systemone`, but for a calling agent. |
+| `laya_preset` | Run a built-in workflow: `guard`, `moderation`, `triage`, or `model_router`. |
+| `laya_route` | Which checkpoint would answer, without loading one. |
+| `laya_status` | Device in use, package versions, and what is resident. |
+
+Those are the calls that run a forward pass (`laya_predict` directly, `laya_preset`
+through it), so they are the ones that keep a checkpoint resident and reset the idle
+clock. Point a client at the endpoint:
+
+```json
+{
+  "mcpServers": {
+    "laya": {
+      "type": "http",
+      "url": "http://127.0.0.1:8001/mcp"
+    }
+  }
+}
+```
+
+The exact keys vary by client (`url` with `type` is the common pair; some use
+`transport`). For Claude Code:
+
+```bash
+claude mcp add --transport http laya http://127.0.0.1:8001/mcp
+```
+
+Without Compose, from the same image and model cache:
+
+```bash
+docker run -d --name laya-mcp --gpus all --no-healthcheck \
+  -p 127.0.0.1:8001:8000 -v laya-models:/models \
+  ghcr.io/beremaran/laya-docker:latest \
+  uv run --no-sync --frozen laya-idle-mcp
+```
+
+`--no-healthcheck` because the image's probe checks the HTTP `/health` route, which
+this process does not serve. The Compose service substitutes a check that the port is
+answering.
+
+Two things to know before running both endpoints. The MCP server builds its own
+`Router`, so it holds its own copy of a checkpoint: a container under load on both
+holds two, each obeying its own `LAYA_IDLE_TIMEOUT`. And there is no token on the MCP
+endpoint, unlike `LAYA_API_KEY` on the HTTP API, so the loopback binding is the only
+thing between it and anything else on the network. For remote agents, put an
+authenticated TLS proxy in front.
 
 ## API
 
@@ -112,11 +240,15 @@ clients.
 
 ### `GET /health`
 
-Always unauthenticated. Reports the server state and which checkpoints are resident.
+Always unauthenticated. Reports the server state and which checkpoints are resident. An
+empty `loaded` means cold or asleep; see [Sleeping on idle](#sleeping-on-idle).
 
 ```json
-{"status": "ok", "loaded": ["english", "multilingual", "typed-decisions"], "device": "cuda"}
+{"status": "ok", "loaded": ["english", "multilingual"], "device": "cuda"}
 ```
+
+That is a server that has answered in both languages and not gone idle yet; the
+default `LAYA_MAX_LOADED` of 2 is what stops a third one staying resident.
 
 ### `POST /v1/systemone`
 
