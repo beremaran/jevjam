@@ -111,7 +111,7 @@ All configuration is by environment variable. Defaults shown are what the image 
 | `LAYA_MAX_LOADED` | `2` | Checkpoints that may stay resident while the server is awake; past this the least recently used one is dropped. Must be a whole number of 1 or more. |
 | `LAYA_AUTO_TASK` | `0` | `1` lets the router reach `typed-decisions` automatically. |
 | `LAYA_THREADS` | torch default | Caps torch intra-op threads for CPU inference; keep at or below physical cores. |
-| `LAYA_API_KEY` | unset | When set, HTTP API requests must send `Authorization: Bearer <key>`. MCP is not covered. |
+| `LAYA_API_KEY` | unset | When set, requests to `/v1/systemone` and `/mcp` must send `Authorization: Bearer <key>`. `GET /health` remains public. |
 | `LAYA_LOG_LEVEL` | `info` | Uvicorn log level, and the level of this server's own log lines. |
 | `HF_HOME` | `/models` | Checkpoint cache location. Mount a volume here. |
 | `HF_TOKEN` | unset | Optional Hugging Face credential. |
@@ -170,35 +170,206 @@ client. Four tools are available:
 
 Those are the calls that run a forward pass (`laya_predict` directly, `laya_preset`
 through it), so they are the ones that keep a checkpoint resident and reset the idle
-clock. Point a client at the endpoint:
+clock.
+
+### Authentication and remote access
+
+When `LAYA_API_KEY` is set, every request to `/mcp` must include
+`Authorization: Bearer <key>`. The same key protects the HTTP API. Leave it unset to
+allow unauthenticated requests; `GET /health` stays public either way.
+
+For local clients, use `http://127.0.0.1:8000/mcp`. For remote clients, point them at
+the proxy URL. The proxy handles TLS and routes to Laya; Laya checks the Bearer token.
+The four combinations are:
+
+| Proxy URL | `LAYA_API_KEY` on server | Client sends Bearer token | Result |
+| --- | --- | --- | --- |
+| `http://laya.example.com/mcp` | set | yes | Authenticated, but HTTP does not encrypt the token or traffic. Use only on a trusted private network. |
+| `https://laya.example.com/mcp` | set | yes | Authenticated and encrypted in transit. |
+| `http://laya.example.com/mcp` | unset | no | Open to anyone who can reach it; traffic is unencrypted. |
+| `https://laya.example.com/mcp` | unset | no | Open to anyone who can reach it; traffic is encrypted. |
+
+If the server key is set but the client omits it or sends a wrong one, MCP returns
+`401`. Keep the key out of shared project config. Set it in the server environment
+and in the environment used to start the client. For example, in a local shell:
+
+```bash
+export LAYA_API_KEY=secret
+docker compose up -d
+```
+
+### Install in a client
+
+The examples below use user-local settings so credentials do not go into a shared
+project file. In each client, use the local URL and omit the `Authorization` header
+when the server key is unset. For a remote connection, replace the URL; add the
+Bearer setting when the server key is set. A client using a remote URL must be able
+to reach that proxy from its own host or network.
+
+#### [OpenCode](https://opencode.ai/v2/docs/mcp-servers)
+
+Add this to `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "laya": {
+        "type": "remote",
+        "url": "http://127.0.0.1:8000/mcp"
+      }
+    }
+  }
+}
+```
+
+For a remote server with a key, use this entry instead. OpenCode reads the variable
+from its process environment:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "laya": {
+        "type": "remote",
+        "url": "https://laya.example.com/mcp",
+        "oauth": false,
+        "headers": {
+          "Authorization": "Bearer {env:LAYA_API_KEY}"
+        }
+      }
+    }
+  }
+}
+```
+
+Check the connection with `opencode mcp list`. You can also add a server with
+`opencode mcp add laya --global --url http://127.0.0.1:8000/mcp`. OpenCode remote
+servers use OAuth by default, so the authenticated config sets `"oauth": false` and
+sends the Bearer header instead. For a project-only entry, use the same shape in the
+project's `opencode.json` and omit `--global` from the CLI command.
+
+#### [Pi](https://pi.dev/)
+
+Pi core does not include MCP support. Install the third-party
+[`pi-mcp-adapter`](https://pi.dev/packages/pi-mcp-adapter) extension, then restart
+Pi:
+
+```bash
+pi install npm:pi-mcp-adapter
+```
+
+Add this to the user config at `~/.config/mcp/mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "laya": {
-      "type": "http",
       "url": "http://127.0.0.1:8000/mcp"
     }
   }
 }
 ```
 
-The exact keys vary by client (`url` with `type` is the common pair; some use
-`transport`). For Claude Code:
+For a project-shared server, the adapter also reads `.mcp.json` in the project root.
 
-```bash
-claude mcp add --transport http laya http://127.0.0.1:8000/mcp
+For a remote server with a key, use this config instead. The adapter expands the
+environment variable:
+
+```json
+{
+  "mcpServers": {
+    "laya": {
+      "url": "https://laya.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${LAYA_API_KEY}"
+      }
+    }
+  }
+}
 ```
 
-The MCP endpoint does not use `LAYA_API_KEY`. Keep the published port on loopback, or
-put an authenticated TLS proxy in front for remote agents.
+#### [Codex](https://developers.openai.com/codex/mcp)
+
+Add the local server to `~/.codex/config.toml`:
+
+```bash
+codex mcp add laya --url http://127.0.0.1:8000/mcp
+```
+
+For a remote server with a key, use the proxy URL and name the environment variable
+that holds the token:
+
+```bash
+codex mcp add laya --url https://laya.example.com/mcp \
+  --bearer-token-env-var LAYA_API_KEY
+```
+
+Check with `codex mcp list` or `/mcp` in the Codex TUI. Codex also reads project
+settings from `.codex/config.toml` in trusted projects.
+
+#### [Claude Code](https://code.claude.com/docs/en/mcp)
+
+Add the local server for all your projects:
+
+```bash
+claude mcp add --transport http --scope user laya http://127.0.0.1:8000/mcp
+```
+
+For a remote server with a key, use the proxy URL and pass the token from the
+environment:
+
+```bash
+claude mcp add --transport http --scope user laya \
+  https://laya.example.com/mcp \
+  --header "Authorization: Bearer $LAYA_API_KEY"
+```
+
+Check with `claude mcp list` or `/mcp`. Omit `--scope user` to keep the server
+private to the current project; `--scope project` writes a shared `.mcp.json`.
+
+### Reverse proxy examples
+
+These snippets route `/mcp` to Laya over HTTP and pass the `Authorization` header
+through. Configure TLS on the proxy as you normally would; these examples do not
+set up certificates or add a second auth layer. If the proxy runs in Docker, use an
+upstream address it can reach, such as `http://laya:8000` when both containers share
+a network, instead of `127.0.0.1`.
+
+Nginx, inside the proxy's existing `server` block:
+
+```nginx
+location /mcp {
+    proxy_pass http://127.0.0.1:8000;
+    proxy_http_version 1.1;
+    proxy_read_timeout 10m;
+    proxy_set_header Host $host;
+    proxy_set_header Authorization $http_authorization;
+}
+```
+
+Traefik dynamic configuration:
+
+```yaml
+http:
+  routers:
+    laya-mcp:
+      rule: "Host(`laya.example.com`) && PathPrefix(`/mcp`)"
+      service: laya-mcp
+  services:
+    laya-mcp:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:8000"
+```
+
+Traefik forwards `Authorization` by default. Do not add middleware that removes it.
 
 ## API
 
 The HTTP API exposes `/health` and `/v1/systemone`; MCP is available at `/mcp` on the
-same port. There is no authentication until `LAYA_API_KEY` is set, and that key only
-protects the HTTP API. Keep the published port on loopback and put a TLS reverse proxy
-in front for remote clients.
+same port. `LAYA_API_KEY` protects the HTTP API and MCP when set. Keep the published
+port on loopback for local use, or put a TLS reverse proxy in front for remote clients.
 
 ### `GET /health`
 

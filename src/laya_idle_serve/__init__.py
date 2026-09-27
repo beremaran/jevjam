@@ -25,6 +25,7 @@ Nothing heavy is imported at module level. `import laya` and `import laya.serve`
 both cheap and torch-free, and the config and timer code below stays testable
 without a GPU, following the same rule laya sets for itself.
 """
+import hmac
 import logging
 import os
 import threading
@@ -100,6 +101,15 @@ def build_router(max_loaded):
         device=os.environ.get("LAYA_DEVICE") or None,
         auto_task_detection=_env_bool("LAYA_AUTO_TASK", False),
         max_loaded=max_loaded,
+    )
+
+
+def _valid_bearer(authorization, key):
+    scheme, separator, token = authorization.partition(" ")
+    return (
+        bool(separator)
+        and scheme.lower() == "bearer"
+        and hmac.compare_digest(token.encode("utf-8"), key.encode("utf-8"))
     )
 
 
@@ -206,6 +216,7 @@ def build_app(router=None, timeout=None, max_loaded=None):
         timeout = read_idle_timeout()
     if router is None:
         router = build_router(max_loaded)
+    mcp_api_key = os.environ.get("LAYA_API_KEY") or None
     unloader = IdleUnloader(router, timeout)
     router.add_hook(IdleHook(unloader))
 
@@ -237,13 +248,21 @@ def build_app(router=None, timeout=None, max_loaded=None):
     # Keep laya's health fields while adding readiness for the mounted MCP service.
     @app.middleware("http")
     async def add_mcp_readiness(request, call_next):
-        if request.method == "GET" and request.url.path == "/health":
+        path = request.scope["path"]
+        if request.method == "GET" and path == "/health":
             return JSONResponse({
                 "status": "ok",
                 "loaded": router.loaded,
                 "device": os.environ.get("LAYA_DEVICE") or "auto",
                 "mcp_ready": app.state.mcp_ready,
             })
+        if mcp_api_key and (path == "/mcp" or path.startswith("/mcp/")):
+            if not _valid_bearer(request.headers.get("authorization", ""), mcp_api_key):
+                return JSONResponse(
+                    {"detail": "Unauthorized"},
+                    status_code=401,
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
         return await call_next(request)
 
     app.mount("/", mcp_app)

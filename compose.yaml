@@ -18,8 +18,8 @@ services:
     init: true
     restart: unless-stopped
     ports:
-      # Both endpoints are published on loopback only. LAYA_API_KEY protects the API,
-      # but not MCP, so do not expose this port to the network as-is.
+      # Both endpoints are published on loopback by default. LAYA_API_KEY protects
+      # the HTTP API and MCP when set; keep this bind local or use a TLS proxy remotely.
       - "127.0.0.1:${LAYA_PORT:-8000}:${LAYA_PORT:-8000}"
     environment:
       # One value drives both the port the server binds and the published
@@ -30,7 +30,7 @@ services:
       LAYA_IDLE_TIMEOUT: "${LAYA_IDLE_TIMEOUT:-}"
       # How many checkpoints may stay resident while the server is awake.
       LAYA_MAX_LOADED: "${LAYA_MAX_LOADED:-}"
-      # When set, HTTP API requests must send `Authorization: Bearer <key>`; MCP is not covered.
+      # When set, /v1/systemone and /mcp requests need `Authorization: Bearer <key>`.
       LAYA_API_KEY: "${LAYA_API_KEY:-}"
       # Optional Hugging Face token for higher download rate limits.
       HF_TOKEN: "${HF_TOKEN:-}"

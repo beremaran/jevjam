@@ -19,6 +19,25 @@ QUESTIONS = {"billing": {"type": "noul", "instructions": "Is this about billing?
 STATE = {"body": "I was charged twice"}
 
 
+def call_mcp_predict(client, authorization=None):
+    headers = {"accept": "application/json"}
+    if authorization is not None:
+        headers["authorization"] = authorization
+    return client.post(
+        "/mcp",
+        headers=headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "laya_predict",
+                "arguments": {"state": STATE, "questions": QUESTIONS},
+            },
+        },
+    )
+
+
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
     for name in MANAGED_ENV:
@@ -134,25 +153,57 @@ def test_the_api_and_mcp_tools_share_one_router_and_idle_clock():
         assert router.loads == ["english"]
         assert idle.last_activity is not None
 
-        response = client.post(
-            "/mcp",
-            headers={"accept": "application/json"},
-            json={
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "tools/call",
-                "params": {
-                    "name": "laya_predict",
-                    "arguments": {"state": STATE, "questions": QUESTIONS},
-                },
-            },
-        )
+        response = call_mcp_predict(client)
 
         assert response.status_code == 200, response.text
         result_text = response.json()["result"]["content"][0]["text"]
         assert "answers" in json.loads(result_text)
         assert router.loads == ["english", "english"]
         assert idle.last_activity is not None
+
+
+@pytest.mark.parametrize("authorization", [None, "Basic secret", "Bearer", "Bearer wrong"])
+def test_configured_key_rejects_missing_or_invalid_mcp_bearer(authorization, monkeypatch):
+    monkeypatch.setenv("LAYA_API_KEY", "secret")
+    router = StubRouter()
+    app, _built, idle = build_app(router=router, timeout=60)
+
+    with TestClient(app) as client:
+        response = call_mcp_predict(client, authorization)
+
+    assert response.status_code == 401
+    assert response.headers["www-authenticate"] == "Bearer"
+    assert router.loads == [], "rejected MCP calls must not reach the router"
+    assert idle.last_activity is None, "rejected calls must not reset the idle clock"
+
+
+def test_a_configured_key_protects_every_mcp_method_and_leaves_health_public(monkeypatch):
+    monkeypatch.setenv("LAYA_API_KEY", "secret")
+    app, _built, _idle = build_app(router=StubRouter(), timeout=60)
+
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200
+        assert client.get("/mcp").status_code == 401
+
+
+def test_the_http_api_and_mcp_share_the_configured_bearer_key(monkeypatch):
+    monkeypatch.setenv("LAYA_API_KEY", "secret")
+    router = StubRouter()
+    app, _built, _idle = build_app(router=router, timeout=60)
+
+    with TestClient(app) as client:
+        api_request = {"state": STATE, "questions": QUESTIONS}
+        assert client.post("/v1/systemone", json=api_request).status_code == 401
+        assert client.post(
+            "/v1/systemone",
+            headers={"Authorization": "Bearer secret"},
+            json=api_request,
+        ).status_code == 200
+
+        assert call_mcp_predict(client).status_code == 401
+        response = call_mcp_predict(client, "Bearer secret")
+        assert response.status_code == 200, response.text
+        assert router.loads == ["english", "english"]
 
 
 def test_a_missing_shared_router_fails_instead_of_building_another():

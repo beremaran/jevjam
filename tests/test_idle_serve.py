@@ -26,6 +26,7 @@ from laya_idle_serve import (
 MANAGED_ENV = (
     "LAYA_IDLE_TIMEOUT",
     "LAYA_MAX_LOADED",
+    "LAYA_API_KEY",
     "LAYA_PRELOAD",
     "LAYA_MODELS",
     "LAYA_DEVICE",
