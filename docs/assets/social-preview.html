@@ -1,0 +1,101 @@
+<!doctype html>
+<!-- Source of social-preview.png. Render with:
+     google-chrome --headless --hide-scrollbars --force-device-scale-factor=1 \
+       --window-size=1280,640 --screenshot=social-preview.png social-preview.html -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  html, body { width: 1280px; height: 640px; overflow: hidden; }
+  body {
+    font-family: "IBM Plex Sans", sans-serif;
+    color: #e8ebf2;
+    background:
+      radial-gradient(620px 420px at 8% 0%, rgba(124, 92, 255, .30), transparent 70%),
+      radial-gradient(560px 420px at 100% 100%, rgba(32, 201, 151, .22), transparent 70%),
+      #0a0c12;
+    position: relative;
+  }
+  body::before {  /* faint grid */
+    content: ""; position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+    background-size: 40px 40px;
+    mask-image: radial-gradient(ellipse at 60% 50%, #000 30%, transparent 80%);
+  }
+  .wrap { position: relative; padding: 64px 72px; height: 100%; display: flex; flex-direction: column; }
+  .eyebrow {
+    font-family: "IBM Plex Mono", monospace; font-size: 18px; letter-spacing: .08em;
+    color: #9aa3b8; text-transform: uppercase;
+  }
+  .eyebrow b { color: #20c997; font-weight: 500; }
+  h1 {
+    font-size: 112px; font-weight: 700; letter-spacing: -.045em; line-height: 1.05; margin-top: 14px;
+    display: inline-block; align-self: flex-start; padding-bottom: 6px;
+    background: linear-gradient(92deg, #ffffff 0%, #b9a8ff 50%, #5ce8be 100%);
+    -webkit-background-clip: text; color: transparent;
+  }
+  .tag { font-size: 30px; color: #c4cad8; margin-top: 18px; max-width: 760px; line-height: 1.3; font-weight: 400; }
+  .tag em { font-style: normal; color: #fff; font-weight: 500; }
+
+  .flow { margin-top: auto; display: flex; align-items: center; gap: 18px; }
+  .col { display: flex; flex-direction: column; gap: 12px; }
+  .chip {
+    font-family: "IBM Plex Mono", monospace; font-size: 19px; padding: 11px 18px;
+    border-radius: 12px; border: 1px solid rgba(255,255,255,.12);
+    background: rgba(255,255,255,.04); color: #dfe4ee; white-space: nowrap;
+  }
+  .chip small { color: #8b93a7; font-size: 15px; margin-left: 8px; }
+  .in .chip:first-child { border-color: rgba(124,92,255,.55); }
+  .in .chip:last-child  { border-color: rgba(124,92,255,.35); }
+  .arrow { flex: 1; height: 2px; position: relative; min-width: 60px;
+    background: linear-gradient(90deg, rgba(124,92,255,.15), rgba(124,92,255,.8)); }
+  .arrow.b { background: linear-gradient(90deg, rgba(32,201,151,.25), rgba(32,201,151,.9)); }
+  .arrow::after { content: ""; position: absolute; right: -2px; top: -5px;
+    border: 6px solid transparent; border-left: 9px solid rgba(124,92,255,.9); border-right: 0; }
+  .arrow.b::after { border-left-color: rgba(32,201,151,.95); }
+  .core {
+    padding: 22px 30px; border-radius: 18px; font-size: 30px; font-weight: 700; letter-spacing: -.02em;
+    background: linear-gradient(135deg, rgba(124,92,255,.35), rgba(32,201,151,.25));
+    border: 1px solid rgba(255,255,255,.22);
+    box-shadow: 0 0 60px rgba(124,92,255,.35), inset 0 1px 0 rgba(255,255,255,.18);
+  }
+  .core span { display: block; font: 400 14px "IBM Plex Mono", monospace; color: #cfd5e3; letter-spacing: .02em; margin-top: 4px; }
+  .out .chip { border-color: rgba(32,201,151,.40); }
+  .answers {
+    position: absolute; top: 72px; right: 72px; text-align: right;
+    font-family: "IBM Plex Mono", monospace; font-size: 17px; color: #8b93a7; line-height: 1.9;
+  }
+  .answers code { color: #e8ebf2; background: rgba(255,255,255,.06); padding: 3px 9px; border-radius: 7px; border: 1px solid rgba(255,255,255,.08); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow"><b>●</b>&nbsp; self-hosted · one GPU · Docker</div>
+  <h1>jevjam</h1>
+  <p class="tag">Typed decisions from small models, as <em>MCP tools</em> and a <em>Jev-compatible</em> HTTP API.</p>
+
+  <div class="flow">
+    <div class="col in">
+      <div class="chip">/mcp <small>MCP</small></div>
+      <div class="chip">/v1/systemone <small>HTTP</small></div>
+    </div>
+    <div class="arrow"></div>
+    <div class="core">jevjam<span>one queue · sleeps when idle</span></div>
+    <div class="arrow b"></div>
+    <div class="col out">
+      <div class="chip">Laya <small>default router</small></div>
+      <div class="chip">Julia-1 <small>144M</small></div>
+      <div class="chip">clef-flash <small>images · video</small></div>
+    </div>
+  </div>
+</div>
+<div class="answers">
+  <code>choice</code> pick a label<br>
+  <code>score</code> rate on a scale<br>
+  <code>noul</code> yes or no
+</div>
+</body>
+</html>

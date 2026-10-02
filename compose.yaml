@@ -7,12 +7,12 @@
 #   docker compose down               # stop; the model cache survives
 #
 # The API and MCP endpoint share one process, one queue, and one resident model.
-# See README.md for JEVJAM_IDLE_TIMEOUT and JEVJAM_CLEF_QUANT.
+# See docs/configuration.md for JEVJAM_IDLE_TIMEOUT and JEVJAM_CLEF_QUANT.
 #
 # Each setting falls back to its old LAYA_* name, so an existing .env keeps working.
 #
 # Requires an NVIDIA GPU with a working driver and the NVIDIA Container
-# Toolkit. See README.md for details and the API reference.
+# Toolkit. See README.md to start and docs/api.md for the API reference.
 services:
   jevjam:
     build: .
