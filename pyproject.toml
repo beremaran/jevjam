@@ -8,6 +8,7 @@ dependencies = [
     "accelerate>=1.10",     # clef-flash: GPU/CPU split
     "av>=14",               # clef-flash: video decoding
     "bitsandbytes>=0.48",   # clef-flash: 8-bit and 4-bit loading
+    "flash-linear-attention>=0.5",  # clef-flash: fast linear-attention kernels
     "laya[serve,mcp]==0.3.20",
     "pillow>=11",           # clef-flash: image decoding
     "supersonic-julia",
