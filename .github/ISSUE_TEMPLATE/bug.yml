@@ -1,0 +1,40 @@
+name: Bug report
+description: Something jevjam does wrong or fails to do
+labels: [bug, needs-triage]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead. Paste errors as text.
+    validations:
+      required: true
+  - type: textarea
+    id: request
+    attributes:
+      label: Request
+      description: The `/v1/systemone` body or MCP tool call that shows it, with private data removed.
+      render: json
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Output of `docker compose logs jevjam` (or `docker logs jevjam`) around the failure.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Image tag or commit
+      placeholder: ghcr.io/beremaran/jevjam:0.3.2
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU, driver and VRAM
+      placeholder: RTX 4070 Ti SUPER, 615.71.09, 16 GB
+  - type: dropdown
+    id: model
+    attributes:
+      label: Model
+      options: [Laya, Julia-1, clef-flash, Not model-specific]
