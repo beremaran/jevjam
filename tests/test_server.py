@@ -11,10 +11,12 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from laya_idle_serve import (
+from jevjam import (
     DEFAULT_IDLE_TIMEOUT,
     DEFAULT_MAX_LOADED,
+    RENAMED_ENV,
     IdleUnloader,
+    apply_env,
     build_app,
     build_router,
     read_idle_timeout,
@@ -24,12 +26,11 @@ from laya_idle_serve import (
 
 # Every one of these has a default, so no test may inherit the developer's shell.
 MANAGED_ENV = (
-    "LAYA_IDLE_TIMEOUT",
-    "LAYA_MAX_LOADED",
-    "LAYA_API_KEY",
+    *("%s_%s" % (prefix, key) for prefix in ("JEVJAM", "LAYA") for key in RENAMED_ENV),
     "LAYA_PRELOAD",
     "LAYA_MODELS",
-    "LAYA_DEVICE",
+    "LAYA_AUTO_TASK",
+    "JULIA_CPU_THREADS",
 )
 
 
@@ -77,9 +78,12 @@ class StubRouter:
         if name not in self._resident:
             self._resident.append(name)
 
-    def unload(self):
+    def unload(self, name=None):
         self.unloads += 1
-        self._resident.clear()
+        if name is None:
+            self._resident.clear()
+        else:
+            self._resident.remove(name)
 
     def route(self, state, questions, model=None):
         """Routing only. The real Router decides here and loads nothing, and the
@@ -116,35 +120,35 @@ def test_defaults_when_nothing_is_set():
 @pytest.mark.parametrize("blank", ["", "   "])
 def test_a_blank_value_is_the_default_not_an_error(blank, monkeypatch):
     # Compose sends an unset passthrough as an empty string; that must not stop a boot.
-    monkeypatch.setenv("LAYA_IDLE_TIMEOUT", blank)
-    monkeypatch.setenv("LAYA_MAX_LOADED", blank)
+    monkeypatch.setenv("JEVJAM_IDLE_TIMEOUT", blank)
+    monkeypatch.setenv("JEVJAM_MAX_LOADED", blank)
     assert read_idle_timeout() == 300
     assert read_max_loaded() == 2
 
 
 @pytest.mark.parametrize("raw, seconds", [("0", 0), ("1", 1), ("600", 600), (" 600 ", 600)])
 def test_idle_timeout_is_whole_seconds(raw, seconds, monkeypatch):
-    monkeypatch.setenv("LAYA_IDLE_TIMEOUT", raw)
+    monkeypatch.setenv("JEVJAM_IDLE_TIMEOUT", raw)
     assert read_idle_timeout() == seconds
 
 
 @pytest.mark.parametrize("raw", ["-1", "1.5", "abc", "300s", "0x10", "1,5"])
 def test_a_bad_idle_timeout_stops_the_server(raw, monkeypatch):
-    monkeypatch.setenv("LAYA_IDLE_TIMEOUT", raw)
+    monkeypatch.setenv("JEVJAM_IDLE_TIMEOUT", raw)
     with pytest.raises(SystemExit) as exit_info:
         read_idle_timeout()
-    assert "LAYA_IDLE_TIMEOUT" in str(exit_info.value)
+    assert "JEVJAM_IDLE_TIMEOUT" in str(exit_info.value)
     assert raw in str(exit_info.value)
 
 
 def test_zero_idle_timeout_means_never_sleep(monkeypatch):
-    monkeypatch.setenv("LAYA_IDLE_TIMEOUT", "0")
+    monkeypatch.setenv("JEVJAM_IDLE_TIMEOUT", "0")
     assert read_idle_timeout() == 0
 
 
 @pytest.mark.parametrize("raw, resident", [("1", 1), ("3", 3)])
 def test_max_loaded_is_whole_seconds(raw, resident, monkeypatch):
-    monkeypatch.setenv("LAYA_MAX_LOADED", raw)
+    monkeypatch.setenv("JEVJAM_MAX_LOADED", raw)
     assert read_max_loaded() == resident
 
 
@@ -152,20 +156,20 @@ def test_max_loaded_is_whole_seconds(raw, resident, monkeypatch):
 def test_a_bad_max_loaded_stops_the_server(raw, monkeypatch):
     # 0 is rejected on purpose: laya would silently clamp it to 1, which is the
     # opposite of what someone asking for "no cap" meant.
-    monkeypatch.setenv("LAYA_MAX_LOADED", raw)
+    monkeypatch.setenv("JEVJAM_MAX_LOADED", raw)
     with pytest.raises(SystemExit) as exit_info:
         read_max_loaded()
-    assert "LAYA_MAX_LOADED" in str(exit_info.value)
+    assert "JEVJAM_MAX_LOADED" in str(exit_info.value)
 
 
 def test_env_that_no_longer_does_anything_is_called_out(monkeypatch, caplog):
-    with caplog.at_level(logging.WARNING, logger="laya_idle_serve"):
+    with caplog.at_level(logging.WARNING, logger="jevjam"):
         warn_dead_env()
     assert caplog.records == []
 
     monkeypatch.setenv("LAYA_PRELOAD", "1")
     monkeypatch.setenv("LAYA_MODELS", "english")
-    with caplog.at_level(logging.WARNING, logger="laya_idle_serve"):
+    with caplog.at_level(logging.WARNING, logger="jevjam"):
         warn_dead_env()
     assert len(caplog.records) == 1
     assert "LAYA_PRELOAD" in caplog.records[0].getMessage()
@@ -174,7 +178,7 @@ def test_env_that_no_longer_does_anything_is_called_out(monkeypatch, caplog):
 
 def test_a_blank_dead_variable_is_not_worth_a_warning(monkeypatch, caplog):
     monkeypatch.setenv("LAYA_MODELS", "")  # what an unset Compose passthrough looks like
-    with caplog.at_level(logging.WARNING, logger="laya_idle_serve"):
+    with caplog.at_level(logging.WARNING, logger="jevjam"):
         warn_dead_env()
     assert caplog.records == []
 
@@ -244,7 +248,7 @@ def test_stopping_the_server_stops_the_watcher():
 def test_a_request_reaches_the_router_and_stamps_the_clock():
     router = StubRouter()
     app, built_router, idle = build_app(router=router, timeout=60, max_loaded=1)
-    assert built_router is router, "the app and the watcher must share one router"
+    assert built_router.default is router, "the app and the watcher must share one router"
     assert len(router.hooks) == 1, "the wrapper installs exactly one hook"
 
     with TestClient(app) as client:

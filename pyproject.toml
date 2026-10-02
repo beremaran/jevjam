@@ -1,16 +1,19 @@
 [project]
-name = "laya-idle-serve"
-version = "0.2.0"
-description = "Laya's Jev-compatible HTTP and MCP server, with idle checkpoint unloading"
+name = "jevjam"
+version = "0.3.0"
+description = "Jev-compatible HTTP and MCP server for Laya and Julia decision models, with idle checkpoint unloading"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "laya[serve,mcp]==0.3.20",
+    "supersonic-julia",
     "torch==2.11.0",
+    # Julia-1 needs transformers 5.0.x; Laya accepts it too.
+    "transformers>=5.0,<5.1",
 ]
 
 [project.scripts]
-laya-idle-serve = "laya_idle_serve:main"
+jevjam = "jevjam:main"
 
 [dependency-groups]
 dev = [
@@ -27,6 +30,9 @@ build-backend = "uv_build"
 # CPU or wrong-CUDA build fails the image rather than every request in it.
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
+# Julia's code ships in its model repo, not on PyPI. Keep this rev equal to
+# jevjam.julia.REVISION, so the code and the weights it loads match.
+supersonic-julia = { git = "https://huggingface.co/SupersonicLabs/Julia-1", rev = "a85b127321d580d65176c89ced8273f305745d85" }
 
 [[tool.uv.index]]
 name = "pytorch-cu128"

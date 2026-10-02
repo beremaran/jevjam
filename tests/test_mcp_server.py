@@ -11,9 +11,9 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 from laya.mcp import server as laya_mcp
-from test_idle_serve import MANAGED_ENV, StubRouter, wait_for
+from test_server import MANAGED_ENV, StubRouter, wait_for
 
-from laya_idle_serve import DEFAULT_IDLE_TIMEOUT, IdleUnloader, build_app
+from jevjam import DEFAULT_IDLE_TIMEOUT, IdleUnloader, build_app
 
 QUESTIONS = {"billing": {"type": "noul", "instructions": "Is this about billing?"}}
 STATE = {"body": "I was charged twice"}
@@ -31,7 +31,7 @@ def call_mcp_predict(client, authorization=None):
             "id": 1,
             "method": "tools/call",
             "params": {
-                "name": "laya_predict",
+                "name": "jevjam_predict",
                 "arguments": {"state": STATE, "questions": QUESTIONS},
             },
         },
@@ -48,15 +48,16 @@ def clean_env(monkeypatch):
 
 
 # ------------------------------------------------------------------------ tool layer
-def test_the_four_tools_are_registered():
+def test_the_four_tools_are_registered_under_jevjam_names():
+    build_app(router=StubRouter(), timeout=60)
     names = {tool.name for tool in asyncio.run(laya_mcp.server.list_tools())}
-    assert names == {"laya_predict", "laya_route", "laya_preset", "laya_status"}
+    assert names == {"jevjam_predict", "jevjam_route", "jevjam_preset", "jevjam_status"}
 
 
 def test_a_predict_call_reaches_our_router_and_stamps_the_clock():
     router = StubRouter()
     _app, built, idle = build_app(router=router, timeout=60, max_loaded=1)
-    assert built is router, "the tools and the watcher must share one router"
+    assert built.default is router, "the tools and the watcher must share one router"
     assert len(router.hooks) == 1, "the wrapper installs exactly one hook"
 
     assert idle.last_activity is None
@@ -102,12 +103,12 @@ def test_a_route_call_alone_does_not_pull_in_a_checkpoint():
 
 
 def test_the_idle_timeout_and_cap_come_from_the_environment(monkeypatch):
-    monkeypatch.setenv("LAYA_IDLE_TIMEOUT", "7")
-    monkeypatch.setenv("LAYA_MAX_LOADED", "1")
+    monkeypatch.setenv("JEVJAM_IDLE_TIMEOUT", "7")
+    monkeypatch.setenv("JEVJAM_MAX_LOADED", "1")
     _app, _router, idle = build_app(router=StubRouter())
     assert idle._timeout == 7, "the MCP server obeys the same clock as the HTTP one"
 
-    monkeypatch.delenv("LAYA_IDLE_TIMEOUT")
+    monkeypatch.delenv("JEVJAM_IDLE_TIMEOUT")
     assert build_app(router=StubRouter())[2]._timeout == float(DEFAULT_IDLE_TIMEOUT)
 
 
@@ -135,8 +136,8 @@ def test_a_cold_server_holds_nothing_before_the_first_call():
 def test_the_api_and_mcp_tools_share_one_router_and_idle_clock():
     router = StubRouter()
     app, built, idle = build_app(router=router, timeout=60, max_loaded=1)
-    assert built is router
-    assert laya_mcp._ROUTER is router
+    assert built.default is router
+    assert laya_mcp._ROUTER is built
 
     with TestClient(app) as client:
         assert client.get("/health").json() == {
@@ -164,7 +165,7 @@ def test_the_api_and_mcp_tools_share_one_router_and_idle_clock():
 
 @pytest.mark.parametrize("authorization", [None, "Basic secret", "Bearer", "Bearer wrong"])
 def test_configured_key_rejects_missing_or_invalid_mcp_bearer(authorization, monkeypatch):
-    monkeypatch.setenv("LAYA_API_KEY", "secret")
+    monkeypatch.setenv("JEVJAM_API_KEY", "secret")
     router = StubRouter()
     app, _built, idle = build_app(router=router, timeout=60)
 
@@ -178,7 +179,7 @@ def test_configured_key_rejects_missing_or_invalid_mcp_bearer(authorization, mon
 
 
 def test_a_configured_key_protects_every_mcp_method_and_leaves_health_public(monkeypatch):
-    monkeypatch.setenv("LAYA_API_KEY", "secret")
+    monkeypatch.setenv("JEVJAM_API_KEY", "secret")
     app, _built, _idle = build_app(router=StubRouter(), timeout=60)
 
     with TestClient(app) as client:
@@ -187,7 +188,7 @@ def test_a_configured_key_protects_every_mcp_method_and_leaves_health_public(mon
 
 
 def test_the_http_api_and_mcp_share_the_configured_bearer_key(monkeypatch):
-    monkeypatch.setenv("LAYA_API_KEY", "secret")
+    monkeypatch.setenv("JEVJAM_API_KEY", "secret")
     router = StubRouter()
     app, _built, _idle = build_app(router=router, timeout=60)
 

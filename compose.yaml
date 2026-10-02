@@ -1,37 +1,39 @@
-# Example Compose file for the Laya HTTP API and MCP endpoint.
+# Example Compose file for the jevjam HTTP API and MCP endpoint.
 #
 #   docker compose pull               # fetch the published image instead of building
 #   docker compose up --build -d      # build if needed, start detached
-#   docker compose logs -f laya       # follow startup and request logs
+#   docker compose logs -f jevjam     # follow startup and request logs
 #   curl http://127.0.0.1:8000/health
 #   docker compose down               # stop; the model cache survives
 #
-# The API and MCP endpoint share one process, Router, and model copy in GPU memory.
-# See README.md for the LAYA_IDLE_TIMEOUT and LAYA_MAX_LOADED settings.
+# The API and MCP endpoint share one process, one set of models, and one copy of
+# each in GPU memory. See README.md for JEVJAM_IDLE_TIMEOUT and JEVJAM_MAX_LOADED.
+#
+# Each setting falls back to its old LAYA_* name, so an existing .env keeps working.
 #
 # Requires an NVIDIA GPU with a working driver and the NVIDIA Container
 # Toolkit. See README.md for details and the API reference.
 services:
-  laya:
+  jevjam:
     build: .
-    image: ghcr.io/beremaran/laya-docker:latest
+    image: ghcr.io/beremaran/jevjam:latest
     init: true
     restart: unless-stopped
     ports:
-      # Both endpoints are published on loopback by default. LAYA_API_KEY protects
+      # Both endpoints are published on loopback by default. JEVJAM_API_KEY protects
       # the HTTP API and MCP when set; keep this bind local or use a TLS proxy remotely.
-      - "127.0.0.1:${LAYA_PORT:-8000}:${LAYA_PORT:-8000}"
+      - "127.0.0.1:${JEVJAM_PORT:-${LAYA_PORT:-8000}}:${JEVJAM_PORT:-${LAYA_PORT:-8000}}"
     environment:
       # One value drives both the port the server binds and the published
       # host port above, so the two cannot drift apart.
-      LAYA_PORT: "${LAYA_PORT:-8000}"
+      JEVJAM_PORT: "${JEVJAM_PORT:-${LAYA_PORT:-8000}}"
       # Seconds without an inference request before the checkpoints are freed.
       # 0 keeps them resident; unset uses the built-in 300.
-      LAYA_IDLE_TIMEOUT: "${LAYA_IDLE_TIMEOUT:-}"
-      # How many checkpoints may stay resident while the server is awake.
-      LAYA_MAX_LOADED: "${LAYA_MAX_LOADED:-}"
+      JEVJAM_IDLE_TIMEOUT: "${JEVJAM_IDLE_TIMEOUT:-${LAYA_IDLE_TIMEOUT:-}}"
+      # How many checkpoints, Laya and Julia together, may stay resident.
+      JEVJAM_MAX_LOADED: "${JEVJAM_MAX_LOADED:-${LAYA_MAX_LOADED:-}}"
       # When set, /v1/systemone and /mcp requests need `Authorization: Bearer <key>`.
-      LAYA_API_KEY: "${LAYA_API_KEY:-}"
+      JEVJAM_API_KEY: "${JEVJAM_API_KEY:-${LAYA_API_KEY:-}}"
       # Optional Hugging Face token for higher download rate limits.
       HF_TOKEN: "${HF_TOKEN:-}"
     volumes:

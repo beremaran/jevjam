@@ -1,4 +1,8 @@
-"""Laya's HTTP and MCP servers, with checkpoints freed when they go idle.
+"""Jev-compatible HTTP and MCP servers for Laya and Julia, freed when idle.
+
+Laya's own server answers with Laya alone. This one also answers with
+SupersonicLabs/Julia-1 when a request names it (see `models.py`), and puts both
+behind one resident limit and one idle timer.
 
 `laya-serve` loads the checkpoints at boot and then holds them for the life of the
 process. That is the wrong shape for a server that sits unused between bursts: the
@@ -6,17 +10,21 @@ GPU memory stays committed to checkpoints nobody is asking anything.
 
 This wrapper is the same server with one difference. It never preloads, so a fresh
 container holds no checkpoint at all, and it frees every checkpoint once no request
-has reached the router for `LAYA_IDLE_TIMEOUT` seconds. Waking costs nothing extra:
+has reached the router for `JEVJAM_IDLE_TIMEOUT` seconds. Waking costs nothing extra:
 `Router.predict` already loads the checkpoint a request routes to, so the first
 request after a sleep builds one checkpoint, not three.
 
-    LAYA_IDLE_TIMEOUT   seconds of no inference before unloading; 0 disables the
-                        timer and the checkpoints stay resident (default 300)
-    LAYA_MAX_LOADED     checkpoints that may stay resident while the server is awake,
-                        passed to `Router(max_loaded=...)` (default 2)
+    JEVJAM_IDLE_TIMEOUT   seconds of no inference before unloading; 0 disables the
+                          timer and the checkpoints stay resident (default 300)
+    JEVJAM_MAX_LOADED     checkpoints, across Laya and Julia, that may stay resident
+                          while the server is awake (default 2)
 
-Both are whole numbers of seconds, and a value that is not one is a startup error
-naming the variable, rather than a timeout nobody notices.
+Both are whole numbers, and a value that is not one is a startup error naming the
+variable, rather than a timeout nobody notices.
+
+Every `JEVJAM_*` setting used to be `LAYA_*`. The old name still works with a
+warning; `apply_env` copies it across, then copies the new names back to the
+`LAYA_*` ones laya reads itself.
 
 `LAYA_PRELOAD` and `LAYA_MODELS` no longer do anything: both only ever fed a preload,
 and there is no preload. Setting either logs a warning and is otherwise ignored.
@@ -31,10 +39,13 @@ import os
 import threading
 import time
 
-log = logging.getLogger("laya_idle_serve")
+from .models import Julia, Models
+
+log = logging.getLogger("jevjam")
 
 DEFAULT_IDLE_TIMEOUT = 300  # seconds
-DEFAULT_MAX_LOADED = 2      # laya's own default; the two checkpoints routing can pick
+DEFAULT_MAX_LOADED = 2      # laya's own default
+DEFAULT_PORT = 8000
 
 # Only checked while nothing is resident, so an armed watcher costs nothing and a
 # sleeping one wakes about once a second to notice a request.
@@ -43,6 +54,31 @@ POLL_SECONDS = 1.0
 # laya.serve reads these to choose a preload. There is no preload, so honouring them
 # would be a lie; they are only worth a warning.
 DEAD_ENV = ("LAYA_PRELOAD", "LAYA_MODELS")
+
+# Settings that moved from LAYA_X to JEVJAM_X, and the ones laya still reads as LAYA_X.
+RENAMED_ENV = ("HOST", "PORT", "DEVICE", "API_KEY", "LOG_LEVEL", "IDLE_TIMEOUT", "MAX_LOADED", "THREADS")
+LAYA_READS = ("HOST", "PORT", "DEVICE", "API_KEY", "LOG_LEVEL", "THREADS")
+
+
+def _env(name):
+    return os.environ.get(name, "").strip()
+
+
+def apply_env():
+    """Accept the old LAYA_* names, then hand the JEVJAM_* values to laya and Julia.
+
+    A blank value counts as unset, since Compose passes an unset passthrough as an
+    empty string. Safe to call twice: the second call finds JEVJAM_* already set.
+    """
+    for key in RENAMED_ENV:
+        new, old = "JEVJAM_" + key, "LAYA_" + key
+        if not _env(new) and _env(old):
+            log.warning("%s is deprecated; use %s", old, new)
+            os.environ[new] = os.environ[old]
+        if key in LAYA_READS and _env(new):
+            os.environ[old] = os.environ[new]
+    if _env("JEVJAM_THREADS"):
+        os.environ["JULIA_CPU_THREADS"] = os.environ["JEVJAM_THREADS"]
 
 
 def _int_env(name, default, minimum):
@@ -66,12 +102,12 @@ def _int_env(name, default, minimum):
 
 def read_idle_timeout():
     """Seconds of silence before the checkpoints are freed. 0 never frees them."""
-    return _int_env("LAYA_IDLE_TIMEOUT", DEFAULT_IDLE_TIMEOUT, 0)
+    return _int_env("JEVJAM_IDLE_TIMEOUT", DEFAULT_IDLE_TIMEOUT, 0)
 
 
 def read_max_loaded():
     """How many checkpoints may stay resident while the server is awake."""
-    return _int_env("LAYA_MAX_LOADED", DEFAULT_MAX_LOADED, 1)
+    return _int_env("JEVJAM_MAX_LOADED", DEFAULT_MAX_LOADED, 1)
 
 
 def warn_dead_env():
@@ -80,7 +116,7 @@ def warn_dead_env():
     if set_but_ignored:
         log.warning(
             "ignoring %s: this server starts cold and keeps its checkpoints until "
-            "LAYA_IDLE_TIMEOUT expires", " and ".join(set_but_ignored))
+            "JEVJAM_IDLE_TIMEOUT expires", " and ".join(set_but_ignored))
 
 
 def build_router(max_loaded):
@@ -88,8 +124,9 @@ def build_router(max_loaded):
 
     `laya.serve.build_router` cannot be used: it preloads unless LAYA_PRELOAD says
     otherwise, and it has no way to pass `max_loaded`. Its helpers are imported
-    rather than copied so LAYA_DEVICE, LAYA_AUTO_TASK and LAYA_THREADS keep
-    behaving exactly as laya documents them. The `laya[serve]==0.3.20` pin is what
+    rather than copied so device, thread and LAYA_AUTO_TASK settings keep behaving
+    exactly as laya documents them; `apply_env` has already copied the JEVJAM_*
+    values into the LAYA_* names they read. The `laya[serve]==0.3.20` pin is what
     makes reaching for them safe; a test builds a real Router through this function,
     so a laya release that moves them fails there rather than in the image.
     """
@@ -145,7 +182,7 @@ class IdleUnloader:
         """Run the watcher. A timeout of 0 means the checkpoints stay resident."""
         if not self._timeout:
             return
-        self._thread = threading.Thread(target=self._run, name="laya-idle", daemon=True)
+        self._thread = threading.Thread(target=self._run, name="jevjam-idle", daemon=True)
         self._thread.start()
 
     def stop(self):
@@ -197,26 +234,63 @@ class IdleHook:
         log.info("loaded %s", ctx.model)
 
 
-def build_app(router=None, timeout=None, max_loaded=None):
-    """The HTTP and MCP ASGI app, its shared router, and its idle watcher.
+def rename_mcp(laya_mcp):
+    """Serve laya's MCP tools as jevjam_* from a server named jevjam."""
+    manager = laya_mcp.server._tool_manager
+    laya_mcp.server._lowlevel_server.name = "jevjam"
+    for old in ("laya_predict", "laya_preset", "laya_route", "laya_status"):
+        tool = manager.get_tool(old)
+        if tool is None:  # already renamed by an earlier build_app
+            continue
+        description = tool.description
+        if old == "laya_predict":
+            description += (" model: 'auto' (default), 'english', 'multilingual', "
+                            "'typed-decisions', or 'julia-1' for SupersonicLabs/Julia-1.")
+        laya_mcp.server.remove_tool(old)
+        laya_mcp.server.add_tool(tool.fn, name="jevjam_" + old[len("laya_"):], title=tool.title,
+                                 description=description, annotations=tool.annotations)
 
-    Every argument defaults to the environment, and `router` can be handed in so a
-    test can drive both endpoints with a stand-in. The app's lifespan owns the MCP
-    session manager and watcher; the returned watcher is exposed for tests and status.
+
+def build_app(router=None, timeout=None, max_loaded=None, others=None):
+    """The HTTP and MCP ASGI app, its shared models, and its idle watcher.
+
+    Every argument defaults to the environment. `router` is laya's Router and
+    `others` the other backends; tests hand in stand-ins for both. The returned
+    `Models` is the one object both endpoints and the watcher use. The app's
+    lifespan owns the MCP session manager and watcher; the returned watcher is
+    exposed for tests and status.
     """
     from contextlib import asynccontextmanager
     from fastapi.responses import JSONResponse
-    from laya.serve import create_app
+    from laya import serve as laya_serve
     from laya.mcp import server as laya_mcp
+    from laya.mcp import tools as laya_tools
     from mcp.server.transport_security import TransportSecuritySettings
 
+    apply_env()
     if max_loaded is None:
         max_loaded = read_max_loaded()
     if timeout is None:
         timeout = read_idle_timeout()
     if router is None:
         router = build_router(max_loaded)
-    mcp_api_key = os.environ.get("LAYA_API_KEY") or None
+    if others is None:
+        others = [Julia()]
+    models = Models(router, others, max_loaded)
+    router = models
+    mcp_api_key = _env("JEVJAM_API_KEY") or None
+
+    # laya drops a `model` it does not know before the request reaches the router.
+    # Let the other backends claim theirs first, on both endpoints.
+    laya_resolve = getattr(laya_serve._resolve_model, "laya", laya_serve._resolve_model)
+
+    def resolve_model(model):
+        return models.resolve(model) or laya_resolve(model)
+
+    resolve_model.laya = laya_resolve
+    laya_serve._resolve_model = resolve_model
+    laya_tools.VALID_MODELS.update(alias for b in others for alias in b.aliases)
+    rename_mcp(laya_mcp)
     unloader = IdleUnloader(router, timeout)
     router.add_hook(IdleHook(unloader))
 
@@ -231,7 +305,7 @@ def build_app(router=None, timeout=None, max_loaded=None):
         return laya_mcp._ROUTER
 
     laya_mcp._ensure_router = require_shared_router
-    laya_mcp.server.settings.log_level = os.environ.get("LAYA_LOG_LEVEL", "info").upper()
+    laya_mcp.server.settings.log_level = (_env("JEVJAM_LOG_LEVEL") or "info").upper()
 
     mcp_app = laya_mcp.server.streamable_http_app(
         json_response=True,
@@ -242,7 +316,7 @@ def build_app(router=None, timeout=None, max_loaded=None):
     )
     session_manager = laya_mcp.server.session_manager
 
-    app = create_app(router)
+    app = laya_serve.create_app(router)
     app.state.mcp_ready = False
 
     # Keep laya's health fields while adding readiness for the mounted MCP service.
@@ -253,7 +327,7 @@ def build_app(router=None, timeout=None, max_loaded=None):
             return JSONResponse({
                 "status": "ok",
                 "loaded": router.loaded,
-                "device": os.environ.get("LAYA_DEVICE") or "auto",
+                "device": _env("JEVJAM_DEVICE") or "auto",
                 "mcp_ready": app.state.mcp_ready,
             })
         if mcp_api_key and (path == "/mcp" or path.startswith("/mcp/")):
@@ -290,20 +364,21 @@ def build_app(router=None, timeout=None, max_loaded=None):
 def main():
     """Run the server until it is stopped, then stop the watcher."""
     import uvicorn
-    from laya.serve import _resolve_port
 
     # basicConfig leaves the root logger alone if something already configured one,
     # and uvicorn sets up its own loggers, so this only decides our own lines.
     logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s")
-    log.setLevel(getattr(logging, os.environ.get("LAYA_LOG_LEVEL", "info").upper(), logging.INFO))
+    apply_env()
+    level = _env("JEVJAM_LOG_LEVEL") or "info"
+    log.setLevel(getattr(logging, level.upper(), logging.INFO))
     warn_dead_env()
 
     app, _router, _unloader = build_app()
     uvicorn.run(
         app,
-        host=os.environ.get("LAYA_HOST", "0.0.0.0"),
-        port=_resolve_port(),
-        log_level=os.environ.get("LAYA_LOG_LEVEL", "info"),
+        host=_env("JEVJAM_HOST") or "0.0.0.0",
+        port=_int_env("JEVJAM_PORT", DEFAULT_PORT, 1),
+        log_level=level,
     )
 
 
