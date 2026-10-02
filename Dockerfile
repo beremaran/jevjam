@@ -1,14 +1,13 @@
 # causal-conv1d ships no wheel for torch 2.11, so build one here, where nvcc exists.
 # Keep the torch pin equal to pyproject.toml's, and the Python equal to the final stage's.
-# TORCH_CUDA_ARCH_LIST covers Turing through Blackwell; PTX on the last keeps newer GPUs working.
-FROM nvidia/cuda:12.8.1-devel-ubuntu24.04 AS conv1d
+# Ubuntu 22.04's gcc 11 builds code the final stage's older libstdc++ (bookworm) can load.
+FROM nvidia/cuda:12.8.1-devel-ubuntu22.04 AS conv1d
 COPY --from=ghcr.io/astral-sh/uv:0.9.26 /uv /uvx /usr/local/bin/
-ENV CAUSAL_CONV1D_FORCE_BUILD=TRUE \
-    TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0;10.0;12.0+PTX"
+ENV CAUSAL_CONV1D_FORCE_BUILD=TRUE
 RUN uv venv --python 3.12 /build \
     && uv pip install --python /build/bin/python --index-url https://download.pytorch.org/whl/cu128 \
         --extra-index-url https://pypi.org/simple --index-strategy unsafe-best-match \
-        torch==2.11.0 setuptools wheel packaging ninja pip \
+        torch==2.11.0+cu128 setuptools wheel packaging ninja pip \
     && /build/bin/python -m pip wheel --no-build-isolation --no-deps -w /wheels causal-conv1d==1.7.0
 
 # Slim Python base: the CUDA 12.8 PyTorch wheels carry their own CUDA
@@ -37,10 +36,11 @@ ENV PYTHONUNBUFFERED=1 \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility \
     PATH="/home/jevjam/.venv/bin:$PATH"
 
+# Triton (used by flash-linear-attention) compiles a C launcher at run time, so it needs gcc.
 # uv needs git to fetch Julia's code from its Hugging Face repo. Without git-lfs it
 # fetches only pointers for the weights, which the server downloads on first use.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git \
+    && apt-get install -y --no-install-recommends git gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 jevjam \
     && useradd --uid 10001 --gid jevjam --create-home --shell /usr/sbin/nologin jevjam \
@@ -56,15 +56,14 @@ WORKDIR /home/jevjam
 # The lockfile on its own layer, so a source change does not re-resolve the wheels.
 COPY --chown=jevjam:jevjam pyproject.toml uv.lock README.md ./
 COPY --chown=jevjam:jevjam src ./src
-COPY --from=conv1d --chown=jevjam:jevjam /wheels /tmp/wheels
 
 # Sync as jevjam rather than root, because uv needs a writable environment and cache.
 # The assert is what stops a CPU or wrong-CUDA torch from shipping in a server that
 # would then answer every request in slow motion instead of failing the build.
-RUN uv sync --frozen --no-dev --no-editable \
+RUN --mount=type=bind,from=conv1d,source=/wheels,target=/tmp/wheels \
+    uv sync --frozen --no-dev --no-editable \
     && uv pip install --no-deps /tmp/wheels/*.whl \
-    && rm -rf /tmp/wheels \
-    && uv run --no-sync python -c 'import torch, causal_conv1d, fla; assert torch.version.cuda == "12.8", torch.version.cuda'
+    && uv run --no-sync python -c 'import torch; from causal_conv1d import causal_conv1d_fn; from fla.ops.gated_delta_rule import chunk_gated_delta_rule; assert torch.version.cuda == "12.8", torch.version.cuda'
 
 EXPOSE 8000
 
