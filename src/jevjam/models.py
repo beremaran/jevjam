@@ -117,9 +117,13 @@ def _device():
 
 def load_julia():
     """Download Julia-1 if needed and build it on the configured device."""
+    import julia.router.encoder
     import torch
     from julia import load_model
 
+    # Julia's fast ModernBERT path calls a private method that transformers 5.1
+    # removed. Stock ModernBERT gives the same probabilities, about 1 ms slower.
+    julia.router.encoder.specialize_decision_encoder = lambda model: False
     # Julia sets torch's global thread count from this, 4 when unset. Without a
     # value it would also cap every Laya checkpoint's CPU threads.
     os.environ.setdefault("JULIA_CPU_THREADS", str(torch.get_num_threads()))

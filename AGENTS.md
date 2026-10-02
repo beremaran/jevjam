@@ -10,7 +10,7 @@
 - `src/jevjam/models.py` holds `Models`, which puts Laya's Router and other backends (now Julia-1) behind the Router's own surface and enforces one resident limit across them. A new model family is a new backend there, passed in `build_app`'s `others`.
 - Keep one `Models` shared across HTTP and MCP. MCP tools use `laya.mcp.server._ROUTER`; this wrapper sets it and `_ensure_router` so MCP calls use the same idle watcher and model cache. `tests/test_mcp_server.py` covers this wiring.
 - Laya is pinned to 0.3.20 because the wrapper uses private `laya.serve` helpers (`_resolve_model` is replaced so other backends can claim a `model`), laya's MCP globals (`VALID_MODELS`), and the MCP server's tool manager (to rename tools to `jevjam_*`). Before changing the pin, verify those APIs and run the tests.
-- Julia-1's code comes from its Hugging Face repo as a uv git source. Its `rev` in `pyproject.toml` must equal `REVISION` in `models.py`; a test checks this. Julia needs `transformers` 5.0.x.
+- Julia-1's code comes from its Hugging Face repo as a uv git source. Its `rev` in `pyproject.toml` must equal `REVISION` in `models.py`; a test checks this. Julia pins `transformers<5.1`; `[tool.uv] override-dependencies` lifts that, and `load_julia` turns off the fast path that needs it.
 
 ## Runtime and image
 - Keep `JEVJAM_IDLE_TIMEOUT` and `JEVJAM_MAX_LOADED` defaults in Python. Compose passes unset values as empty strings, which the config parser treats as defaults.

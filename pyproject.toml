@@ -8,8 +8,8 @@ dependencies = [
     "laya[serve,mcp]==0.3.20",
     "supersonic-julia",
     "torch==2.11.0",
-    # Julia-1 needs transformers 5.0.x; Laya accepts it too.
-    "transformers>=5.0,<5.1",
+    # Cloudflare/clef-flash needs 5.10.2 or later; Laya accepts it too.
+    "transformers>=5.10.2",
 ]
 
 [project.scripts]
@@ -38,6 +38,12 @@ supersonic-julia = { git = "https://huggingface.co/SupersonicLabs/Julia-1", rev 
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
+
+# Julia-1 pins transformers <5.1, but only its optional fast ModernBERT path needs
+# that: jevjam.models turns the path off and Julia runs on stock ModernBERT, which
+# gives the same probabilities on newer transformers.
+[tool.uv]
+override-dependencies = ["transformers>=5.10.2"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
