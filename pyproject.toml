@@ -1,6 +1,6 @@
 [project]
 name = "jevjam"
-version = "0.3.0"
+version = "0.3.1"
 description = "Jev-compatible HTTP and MCP server for Laya and Julia decision models, with idle checkpoint unloading"
 readme = "README.md"
 requires-python = ">=3.11"
