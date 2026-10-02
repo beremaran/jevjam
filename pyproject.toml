@@ -1,6 +1,6 @@
 [project]
 name = "jevjam"
-version = "0.3.1"
+version = "0.3.2"
 description = "Self-hosted MCP server and Jev-compatible HTTP API for small decision models (Laya, Julia-1, clef-flash) on one GPU, in Docker"
 readme = "README.md"
 requires-python = ">=3.11"

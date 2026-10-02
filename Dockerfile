@@ -47,6 +47,9 @@ RUN apt-get update \
     && mkdir -p /models \
     && chown -R jevjam:jevjam /models
 
+# The MCP Registry checks this label to confirm the image belongs to server.json's name.
+LABEL io.modelcontextprotocol.server.name="io.github.beremaran/jevjam"
+
 # Mount a named volume at /models to keep downloaded Hugging Face checkpoints.
 VOLUME ["/models"]
 

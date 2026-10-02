@@ -7,6 +7,8 @@ laya.mcp.server` pulls no torch, so none of this needs CUDA.
 """
 import asyncio
 import json
+import tomllib
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -215,3 +217,12 @@ def test_a_missing_shared_router_fails_instead_of_building_another():
         laya_mcp.laya_predict_tool(state=STATE, questions=QUESTIONS)
 
     assert router.loads == []
+
+
+def test_registry_entry_names_this_version_and_image():
+    root = Path(__file__).parent.parent
+    version = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
+    entry = json.loads((root / "server.json").read_text())
+    assert entry["version"] == version
+    assert entry["packages"][0]["identifier"] == f"ghcr.io/beremaran/jevjam:{version}"
+    assert f'io.modelcontextprotocol.server.name="{entry["name"]}"' in (root / "Dockerfile").read_text()
