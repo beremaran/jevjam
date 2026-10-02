@@ -10,14 +10,41 @@ RUN uv venv --python 3.12 /build \
         torch==2.11.0+cu128 setuptools wheel packaging ninja pip \
     && /build/bin/python -m pip wheel --no-build-isolation --no-deps -w /wheels causal-conv1d==1.7.0
 
+# Dependencies get their own stage, so git stays out of the final image and the
+# ~8 GB venv lands in one layer that only changes when uv.lock does. A jevjam-only
+# release then downloads a few MB instead of the whole stack.
+FROM python:3.12-slim-bookworm AS deps
+
+# uv installs what pyproject.toml asks for. The versions it resolves are frozen in
+# uv.lock, including torch on the CUDA 12.8 index, so nothing here can move them out
+# from under the check in the final stage. Keep this tag equal to the one CI pins
+# in astral-sh/setup-uv.
+COPY --from=ghcr.io/astral-sh/uv:0.9.26 /uv /uvx /usr/local/bin/
+
+# uv needs git to fetch Julia's code from its Hugging Face repo. Without git-lfs it
+# fetches only pointers for the weights, which the server downloads on first use.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
+# The venv sits where the final stage keeps it: its scripts name their interpreter
+# by absolute path.
+WORKDIR /home/jevjam
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
+COPY pyproject.toml uv.lock ./
+
+# bitsandbytes ships a library for every CUDA, ROCm and XPU release; this torch
+# only ever loads the CUDA 12.8 one, or the CPU one without a GPU.
+RUN --mount=type=bind,from=conv1d,source=/wheels,target=/tmp/wheels \
+    uv sync --frozen --no-dev --no-install-project --no-cache \
+    && uv pip install --no-cache --no-deps /tmp/wheels/*.whl \
+    && find .venv/lib/python3.12/site-packages/bitsandbytes -name 'libbitsandbytes_*.so' \
+        ! -name '*_cuda128.so' ! -name '*_cpu.so' -delete
+
 # Slim Python base: the CUDA 12.8 PyTorch wheels carry their own CUDA
 # libraries, and the NVIDIA Container Toolkit injects the driver at run time.
 FROM python:3.12-slim-bookworm
 
-# uv installs what pyproject.toml asks for. The versions it resolves are frozen in
-# uv.lock, including torch on the CUDA 12.8 index, so nothing here can move them out
-# from under the check at the end of the sync below. Keep this tag equal to the one
-# CI pins in astral-sh/setup-uv.
 COPY --from=ghcr.io/astral-sh/uv:0.9.26 /uv /uvx /usr/local/bin/
 
 # No JEVJAM_* setting is set here: their defaults live in one place, the code, so
@@ -37,10 +64,8 @@ ENV PYTHONUNBUFFERED=1 \
     PATH="/home/jevjam/.venv/bin:$PATH"
 
 # Triton (used by flash-linear-attention) compiles a C launcher at run time, so it needs gcc.
-# uv needs git to fetch Julia's code from its Hugging Face repo. Without git-lfs it
-# fetches only pointers for the weights, which the server downloads on first use.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git gcc libc6-dev \
+    && apt-get install -y --no-install-recommends gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 jevjam \
     && useradd --uid 10001 --gid jevjam --create-home --shell /usr/sbin/nologin jevjam \
@@ -56,16 +81,15 @@ VOLUME ["/models"]
 USER jevjam
 WORKDIR /home/jevjam
 
-# The lockfile on its own layer, so a source change does not re-resolve the wheels.
+COPY --from=deps --chown=jevjam:jevjam /home/jevjam/.venv ./.venv
 COPY --chown=jevjam:jevjam pyproject.toml uv.lock README.md LICENSE ./
 COPY --chown=jevjam:jevjam src ./src
 
-# Sync as jevjam rather than root, because uv needs a writable environment and cache.
-# The assert is what stops a CPU or wrong-CUDA torch from shipping in a server that
-# would then answer every request in slow motion instead of failing the build.
-RUN --mount=type=bind,from=conv1d,source=/wheels,target=/tmp/wheels \
-    uv sync --frozen --no-dev --no-editable \
-    && uv pip install --no-deps /tmp/wheels/*.whl \
+# Only jevjam itself is left to install; --inexact keeps causal-conv1d, which uv.lock
+# does not list. The assert is what stops a CPU or wrong-CUDA torch from shipping in
+# a server that would then answer every request in slow motion instead of failing
+# the build.
+RUN uv sync --frozen --no-dev --no-editable --inexact --no-cache \
     && uv run --no-sync python -c 'import torch; from causal_conv1d import causal_conv1d_fn; from fla.ops.gated_delta_rule import chunk_gated_delta_rule; assert torch.version.cuda == "12.8", torch.version.cuda'
 
 EXPOSE 8000

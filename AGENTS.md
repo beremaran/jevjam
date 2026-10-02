@@ -17,7 +17,8 @@
 ## Runtime and image
 - Keep the `JEVJAM_IDLE_TIMEOUT` default in Python. Compose passes unset values as empty strings, which the config parser treats as defaults.
 - Settings are `JEVJAM_*`; `apply_env()` accepts the old `LAYA_*` names with a warning and copies the new values back to the `LAYA_*` names laya reads itself. Don't set `JEVJAM_*` defaults in the Dockerfile: they would shadow an operator's old `LAYA_*` values.
-- `causal-conv1d` has no wheel for torch 2.11, so a Dockerfile build stage compiles it with nvcc and the final stage installs it outside `uv.lock`; `uv sync` would remove it. Keep its torch pin equal to `pyproject.toml`'s. `flash-linear-attention` is a normal dependency.
+- `causal-conv1d` has no wheel for torch 2.11, so a Dockerfile build stage compiles it with nvcc and the `deps` stage installs it outside `uv.lock`; the final stage's `uv sync` needs `--inexact` to keep it. Keep its torch pin equal to `pyproject.toml`'s. `flash-linear-attention` is a normal dependency.
+- The `deps` stage builds the venv from `uv.lock` alone, so its ~8 GB layer stays cached across code-only releases. Keep source copies out of that stage.
 - PyTorch comes from the explicit CUDA 12.8 index in `pyproject.toml`; the Docker build checks `torch.version.cuda == "12.8"`. Update the index, lockfile, and Docker validation together if changing the CUDA/PyTorch version.
 
 ## Agent skills
