@@ -1,4 +1,4 @@
-"""Tests for the Julia backend, the shared resident limit and the JEVJAM_* settings.
+"""Tests for the Julia backend, the one-resident rule and the JEVJAM_* settings.
 
 No GPU, no download: Julia's engine is a stand-in that scores with fixed logits, but
 the answers go through Julia's real `predict_typed`, so its validation and output
@@ -16,7 +16,7 @@ from laya.mcp import server as laya_mcp
 from test_server import MANAGED_ENV, StubRouter, wait_for
 
 from jevjam import apply_env, build_app
-from jevjam.models import REVISION, Julia
+from jevjam.models import JULIA_REVISION, Julia
 
 STATE = {"body": "I was charged twice. Refund it or I cancel."}
 QUESTIONS = {
@@ -116,28 +116,19 @@ def test_mcp_predict_reaches_julia():
     assert '"julia-1": "cpu"' in laya_mcp.laya_status_tool(), "status reports Julia's device"
 
 
-# ------------------------------------------------------------------ resident limit
-def test_laya_and_julia_share_one_resident_limit():
+# ------------------------------------------------------------------- one resident
+def test_one_checkpoint_is_resident_at_a_time():
     router = StubRouter()
-    app, models, _idle = build_app(router=router, timeout=60, max_loaded=1, others=[julia()])
+    app, models, _idle = build_app(router=router, timeout=60, others=[julia()])
     with TestClient(app) as client:
         assert ask(client, None).status_code == 200
         assert models.loaded == ["english"]
         assert ask(client, "julia-1").status_code == 200
         assert models.loaded == ["julia-1"], "loading Julia frees Laya's checkpoint"
-        assert ask(client, None).status_code == 200
-        assert models.loaded == ["english"], "and the other way round"
-
-
-def test_the_least_recently_used_checkpoint_goes_first():
-    router = StubRouter()
-    app, models, _idle = build_app(router=router, timeout=60, max_loaded=2, others=[julia()])
-    with TestClient(app) as client:
-        ask(client, "julia-1")
-        ask(client, "english")
-        ask(client, "julia-1")            # julia is now the most recent
-        ask(client, "multilingual")
-    assert sorted(models.loaded) == ["julia-1", "multilingual"]
+        assert ask(client, "multilingual").status_code == 200
+        assert models.loaded == ["multilingual"], "and the other way round"
+        assert ask(client, "english").status_code == 200
+        assert models.loaded == ["english"], "Laya's own checkpoints swap too"
 
 
 def test_the_idle_watcher_frees_julia_too():
@@ -150,7 +141,7 @@ def test_the_idle_watcher_frees_julia_too():
 
 def test_julia_code_and_weights_come_from_one_commit():
     pyproject = (Path(__file__).parent.parent / "pyproject.toml").read_text()
-    assert re.search(r'supersonic-julia = \{ git = "[^"]+", rev = "%s" \}' % REVISION, pyproject)
+    assert re.search(r'supersonic-julia = \{ git = "[^"]+", rev = "%s" \}' % JULIA_REVISION, pyproject)
 
 
 # ------------------------------------------------------------------------ settings

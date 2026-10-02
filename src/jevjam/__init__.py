@@ -1,8 +1,9 @@
-"""Jev-compatible HTTP and MCP servers for Laya and Julia, freed when idle.
+"""Jev-compatible HTTP and MCP servers for several decision models, freed when idle.
 
 Laya's own server answers with Laya alone. This one also answers with
-SupersonicLabs/Julia-1 when a request names it (see `models.py`), and puts both
-behind one resident limit and one idle timer.
+SupersonicLabs/Julia-1 and Cloudflare/clef-flash when a request names them (see
+`models.py` and `clef.py`). One queue runs every request, one checkpoint stays
+resident at a time, and one idle timer frees it.
 
 `laya-serve` loads the checkpoints at boot and then holds them for the life of the
 process. That is the wrong shape for a server that sits unused between bursts: the
@@ -15,11 +16,9 @@ has reached the router for `JEVJAM_IDLE_TIMEOUT` seconds. Waking costs nothing e
 request after a sleep builds one checkpoint, not three.
 
     JEVJAM_IDLE_TIMEOUT   seconds of no inference before unloading; 0 disables the
-                          timer and the checkpoints stay resident (default 300)
-    JEVJAM_MAX_LOADED     checkpoints, across Laya and Julia, that may stay resident
-                          while the server is awake (default 2)
+                          timer and the checkpoint stays resident (default 300)
 
-Both are whole numbers, and a value that is not one is a startup error naming the
+A whole number, and a value that is not one is a startup error naming the
 variable, rather than a timeout nobody notices.
 
 Every `JEVJAM_*` setting used to be `LAYA_*`. The old name still works with a
@@ -27,7 +26,9 @@ warning; `apply_env` copies it across, then copies the new names back to the
 `LAYA_*` ones laya reads itself.
 
 `LAYA_PRELOAD` and `LAYA_MODELS` no longer do anything: both only ever fed a preload,
-and there is no preload. Setting either logs a warning and is otherwise ignored.
+and there is no preload. `JEVJAM_MAX_LOADED` (once `LAYA_MAX_LOADED`) no longer does
+either, since one checkpoint is resident at a time. Setting any of them logs a
+warning and is otherwise ignored.
 
 Nothing heavy is imported at module level. `import laya` and `import laya.serve` are
 both cheap and torch-free, and the config and timer code below stays testable
@@ -39,24 +40,24 @@ import os
 import threading
 import time
 
-from .models import Julia, Models
+from .models import Julia, ModelUnavailable, Models
 
 log = logging.getLogger("jevjam")
 
 DEFAULT_IDLE_TIMEOUT = 300  # seconds
-DEFAULT_MAX_LOADED = 2      # laya's own default
 DEFAULT_PORT = 8000
 
 # Only checked while nothing is resident, so an armed watcher costs nothing and a
 # sleeping one wakes about once a second to notice a request.
 POLL_SECONDS = 1.0
 
-# laya.serve reads these to choose a preload. There is no preload, so honouring them
-# would be a lie; they are only worth a warning.
-DEAD_ENV = ("LAYA_PRELOAD", "LAYA_MODELS")
+# laya.serve reads the first two to choose a preload, and there is no preload; the
+# last two set a resident limit, and one checkpoint is resident at a time.
+# Honouring them would be a lie; they are only worth a warning.
+DEAD_ENV = ("LAYA_PRELOAD", "LAYA_MODELS", "JEVJAM_MAX_LOADED", "LAYA_MAX_LOADED")
 
 # Settings that moved from LAYA_X to JEVJAM_X, and the ones laya still reads as LAYA_X.
-RENAMED_ENV = ("HOST", "PORT", "DEVICE", "API_KEY", "LOG_LEVEL", "IDLE_TIMEOUT", "MAX_LOADED", "THREADS")
+RENAMED_ENV = ("HOST", "PORT", "DEVICE", "API_KEY", "LOG_LEVEL", "IDLE_TIMEOUT", "THREADS")
 LAYA_READS = ("HOST", "PORT", "DEVICE", "API_KEY", "LOG_LEVEL", "THREADS")
 
 
@@ -105,22 +106,17 @@ def read_idle_timeout():
     return _int_env("JEVJAM_IDLE_TIMEOUT", DEFAULT_IDLE_TIMEOUT, 0)
 
 
-def read_max_loaded():
-    """How many checkpoints may stay resident while the server is awake."""
-    return _int_env("JEVJAM_MAX_LOADED", DEFAULT_MAX_LOADED, 1)
-
-
 def warn_dead_env():
     """Say once, at startup, that a variable which used to work no longer does."""
     set_but_ignored = [name for name in DEAD_ENV if os.environ.get(name, "").strip()]
     if set_but_ignored:
         log.warning(
-            "ignoring %s: this server starts cold and keeps its checkpoints until "
-            "JEVJAM_IDLE_TIMEOUT expires", " and ".join(set_but_ignored))
+            "ignoring %s: this server starts cold, keeps one checkpoint resident, and "
+            "frees it when JEVJAM_IDLE_TIMEOUT expires", " and ".join(set_but_ignored))
 
 
-def build_router(max_loaded):
-    """The Router laya.serve would build, minus the preload and plus `max_loaded`.
+def build_router():
+    """The Router laya.serve would build, minus the preload, holding one checkpoint.
 
     `laya.serve.build_router` cannot be used: it preloads unless LAYA_PRELOAD says
     otherwise, and it has no way to pass `max_loaded`. Its helpers are imported
@@ -137,7 +133,7 @@ def build_router(max_loaded):
     return Router(
         device=os.environ.get("LAYA_DEVICE") or None,
         auto_task_detection=_env_bool("LAYA_AUTO_TASK", False),
-        max_loaded=max_loaded,
+        max_loaded=1,
     )
 
 
@@ -234,24 +230,122 @@ class IdleHook:
         log.info("loaded %s", ctx.model)
 
 
-def rename_mcp(laya_mcp):
-    """Serve laya's MCP tools as jevjam_* from a server named jevjam."""
+class _WithMedia:
+    """The shared models, with a tool call's images and videos added to `predict`."""
+
+    def __init__(self, models, media):
+        self._models, self._media = models, media
+
+    def __getattr__(self, name):
+        return getattr(self._models, name)
+
+    def predict(self, *args, **kwargs):
+        return self._models.predict(*args, **kwargs, **self._media)
+
+
+def rename_mcp(laya_mcp, laya_tools):
+    """Serve laya's MCP tools as jevjam_* from a server named jevjam.
+
+    `jevjam_predict` is laya's predict tool plus `images` and `videos`, which only
+    clef-flash reads.
+    """
     manager = laya_mcp.server._tool_manager
     laya_mcp.server._lowlevel_server.name = "jevjam"
+    if manager.get_tool("laya_predict") is None:  # already renamed by an earlier build_app
+        return
+
+    def jevjam_predict(state: dict, questions: dict, model: str = "auto",
+                       images: list[str] | None = None, videos: list[str] | None = None) -> str:
+        media = {k: v for k, v in (("images", images), ("videos", videos)) if v}
+        router = _WithMedia(laya_mcp._router_or_error(), media)
+        return laya_mcp._wrap(laya_tools.laya_predict, state=state, questions=questions,
+                              model=model, router=router)
+
     for old in ("laya_predict", "laya_preset", "laya_route", "laya_status"):
         tool = manager.get_tool(old)
-        if tool is None:  # already renamed by an earlier build_app
-            continue
-        description = tool.description
+        fn, description = tool.fn, tool.description
         if old == "laya_predict":
-            description += (" model: 'auto' (default), 'english', 'multilingual', "
-                            "'typed-decisions', or 'julia-1' for SupersonicLabs/Julia-1.")
+            fn = jevjam_predict
+            description += (
+                " model: 'auto' (default), 'english', 'multilingual', 'typed-decisions', "
+                "'julia-1' for SupersonicLabs/Julia-1, or 'clef-flash' for Cloudflare/clef-flash. "
+                "images and videos (clef-flash only): base64, data: URIs, or http(s) URLs.")
         laya_mcp.server.remove_tool(old)
-        laya_mcp.server.add_tool(tool.fn, name="jevjam_" + old[len("laya_"):], title=tool.title,
+        laya_mcp.server.add_tool(fn, name="jevjam_" + old[len("laya_"):], title=tool.title,
                                  description=description, annotations=tool.annotations)
 
 
-def build_app(router=None, timeout=None, max_loaded=None, others=None):
+async def _read_capped(request, limit):
+    """The request body, refusing more than `limit` bytes however the client frames it."""
+    from fastapi import HTTPException
+
+    try:
+        declared = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        declared = 0
+    if declared > limit:
+        raise HTTPException(status_code=413, detail="request body too large")
+    chunks, total = [], 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(status_code=413, detail="request body too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def add_routes(app, models, api_key):
+    """`GET /health` and laya's `POST /v1/systemone`, for every model.
+
+    Laya's own handler cannot be reused: it drops `images` and `videos`, and caps
+    every body at 2 MiB. This one keeps laya's checks, and a request naming
+    clef-flash may send up to 20 MiB.
+    """
+    import json
+    from fastapi import HTTPException, Request
+    from laya import serve as laya_serve
+    from starlette.concurrency import run_in_threadpool
+
+    @app.get("/health")
+    def health():
+        return {
+            "status": "ok",
+            "loaded": models.loaded,
+            "device": _env("JEVJAM_DEVICE") or "auto",
+            "mcp_ready": app.state.mcp_ready,
+        }
+
+    @app.post("/v1/systemone")
+    async def systemone(request: Request):
+        if api_key and not _valid_bearer(request.headers.get("authorization", ""), api_key):
+            raise HTTPException(status_code=401, detail="invalid or missing bearer token")
+        raw = await _read_capped(request, models.largest_body_bytes)
+        try:
+            body = json.loads(raw)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="request body must be valid JSON")
+        if not isinstance(body, dict) or "questions" not in body:
+            raise HTTPException(status_code=400, detail="request body must be an object with a 'questions' field")
+        model = models.resolve(body.get("model")) or laya_serve._resolve_model(body.get("model"))
+        if len(raw) > models.max_body_bytes(model):
+            raise HTTPException(status_code=413, detail="request body too large")
+        laya_serve._check_request_limits(body.get("state"), body["questions"])
+        try:
+            # Models runs it on its own queue; this thread only waits for the answer.
+            return await run_in_threadpool(
+                models.predict, body.get("state"), body["questions"], model=model,
+                images=body.get("images"), videos=body.get("videos"))
+        except ModelUnavailable as error:
+            raise HTTPException(status_code=503, detail=str(error))
+        except ValueError as error:
+            # Validation errors name the question and the fix: safe for clients.
+            raise HTTPException(status_code=422, detail=str(error))
+        except Exception:  # never leak paths, weights or OOM text to clients
+            log.exception("inference failed")
+            raise HTTPException(status_code=500, detail="inference failed")
+
+
+def build_app(router=None, timeout=None, others=None):
     """The HTTP and MCP ASGI app, its shared models, and its idle watcher.
 
     Every argument defaults to the environment. `router` is laya's Router and
@@ -261,43 +355,33 @@ def build_app(router=None, timeout=None, max_loaded=None, others=None):
     exposed for tests and status.
     """
     from contextlib import asynccontextmanager
+    from fastapi import FastAPI
     from fastapi.responses import JSONResponse
-    from laya import serve as laya_serve
     from laya.mcp import server as laya_mcp
     from laya.mcp import tools as laya_tools
     from mcp.server.transport_security import TransportSecuritySettings
 
+    from .clef import Clef
+
     apply_env()
-    if max_loaded is None:
-        max_loaded = read_max_loaded()
     if timeout is None:
         timeout = read_idle_timeout()
     if router is None:
-        router = build_router(max_loaded)
+        router = build_router()
     if others is None:
-        others = [Julia()]
-    models = Models(router, others, max_loaded)
-    router = models
-    mcp_api_key = _env("JEVJAM_API_KEY") or None
+        others = [Julia(), Clef()]
+    models = Models(router, others)
+    api_key = _env("JEVJAM_API_KEY") or None
 
-    # laya drops a `model` it does not know before the request reaches the router.
-    # Let the other backends claim theirs first, on both endpoints.
-    laya_resolve = getattr(laya_serve._resolve_model, "laya", laya_serve._resolve_model)
-
-    def resolve_model(model):
-        return models.resolve(model) or laya_resolve(model)
-
-    resolve_model.laya = laya_resolve
-    laya_serve._resolve_model = resolve_model
     laya_tools.VALID_MODELS.update(alias for b in others for alias in b.aliases)
-    rename_mcp(laya_mcp)
-    unloader = IdleUnloader(router, timeout)
-    router.add_hook(IdleHook(unloader))
+    rename_mcp(laya_mcp, laya_tools)
+    unloader = IdleUnloader(models, timeout)
+    models.add_hook(IdleHook(unloader))
 
     # Laya's MCP tools use this module global. Do not let a missed assignment fall
     # back to laya's lazy builder: that would create a second Router outside the
     # idle watcher and could load another copy of a checkpoint into VRAM.
-    laya_mcp._ROUTER = router
+    laya_mcp._ROUTER = models
 
     def require_shared_router():
         if laya_mcp._ROUTER is None:
@@ -316,22 +400,30 @@ def build_app(router=None, timeout=None, max_loaded=None, others=None):
     )
     session_manager = laya_mcp.server.session_manager
 
-    app = laya_serve.create_app(router)
-    app.state.mcp_ready = False
+    @asynccontextmanager
+    async def lifespan(application):
+        try:
+            async with session_manager.run():
+                unloader.start()
+                application.state.mcp_ready = True
+                try:
+                    yield
+                finally:
+                    application.state.mcp_ready = False
+                    unloader.stop()
+        finally:
+            application.state.mcp_ready = False
 
-    # Keep laya's health fields while adding readiness for the mounted MCP service.
+    app = FastAPI(title="jevjam", summary="Typed decisions over the TypeSafe Jev /v1/systemone protocol",
+                  lifespan=lifespan)
+    app.state.mcp_ready = False
+    add_routes(app, models, api_key)
+
     @app.middleware("http")
-    async def add_mcp_readiness(request, call_next):
+    async def require_mcp_key(request, call_next):
         path = request.scope["path"]
-        if request.method == "GET" and path == "/health":
-            return JSONResponse({
-                "status": "ok",
-                "loaded": router.loaded,
-                "device": _env("JEVJAM_DEVICE") or "auto",
-                "mcp_ready": app.state.mcp_ready,
-            })
-        if mcp_api_key and (path == "/mcp" or path.startswith("/mcp/")):
-            if not _valid_bearer(request.headers.get("authorization", ""), mcp_api_key):
+        if api_key and (path == "/mcp" or path.startswith("/mcp/")):
+            if not _valid_bearer(request.headers.get("authorization", ""), api_key):
                 return JSONResponse(
                     {"detail": "Unauthorized"},
                     status_code=401,
@@ -340,25 +432,7 @@ def build_app(router=None, timeout=None, max_loaded=None, others=None):
         return await call_next(request)
 
     app.mount("/", mcp_app)
-    http_lifespan = app.router.lifespan_context
-
-    @asynccontextmanager
-    async def combined_lifespan(application):
-        try:
-            async with session_manager.run():
-                async with http_lifespan(application):
-                    unloader.start()
-                    application.state.mcp_ready = True
-                    try:
-                        yield
-                    finally:
-                        application.state.mcp_ready = False
-                        unloader.stop()
-        finally:
-            application.state.mcp_ready = False
-
-    app.router.lifespan_context = combined_lifespan
-    return app, router, unloader
+    return app, models, unloader
 
 
 def main():

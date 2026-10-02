@@ -6,8 +6,8 @@
 #   curl http://127.0.0.1:8000/health
 #   docker compose down               # stop; the model cache survives
 #
-# The API and MCP endpoint share one process, one set of models, and one copy of
-# each in GPU memory. See README.md for JEVJAM_IDLE_TIMEOUT and JEVJAM_MAX_LOADED.
+# The API and MCP endpoint share one process, one queue, and one resident model.
+# See README.md for JEVJAM_IDLE_TIMEOUT and JEVJAM_CLEF_QUANT.
 #
 # Each setting falls back to its old LAYA_* name, so an existing .env keeps working.
 #
@@ -30,8 +30,8 @@ services:
       # Seconds without an inference request before the checkpoints are freed.
       # 0 keeps them resident; unset uses the built-in 300.
       JEVJAM_IDLE_TIMEOUT: "${JEVJAM_IDLE_TIMEOUT:-${LAYA_IDLE_TIMEOUT:-}}"
-      # How many checkpoints, Laya and Julia together, may stay resident.
-      JEVJAM_MAX_LOADED: "${JEVJAM_MAX_LOADED:-${LAYA_MAX_LOADED:-}}"
+      # How clef-flash loads: auto, bf16, 8bit, 4bit or offload; unset is auto.
+      JEVJAM_CLEF_QUANT: "${JEVJAM_CLEF_QUANT:-}"
       # When set, /v1/systemone and /mcp requests need `Authorization: Bearer <key>`.
       JEVJAM_API_KEY: "${JEVJAM_API_KEY:-${LAYA_API_KEY:-}}"
       # Optional Hugging Face token for higher download rate limits.

@@ -5,9 +5,14 @@ description = "Jev-compatible HTTP and MCP server for Laya and Julia decision mo
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "accelerate>=1.10",     # clef-flash: GPU/CPU split
+    "av>=14",               # clef-flash: video decoding
+    "bitsandbytes>=0.48",   # clef-flash: 8-bit and 4-bit loading
     "laya[serve,mcp]==0.3.20",
+    "pillow>=11",           # clef-flash: image decoding
     "supersonic-julia",
     "torch==2.11.0",
+    "torchvision==0.26.0",  # clef-flash: Qwen3-VL image and video processors
     # Cloudflare/clef-flash needs 5.10.2 or later; Laya accepts it too.
     "transformers>=5.10.2",
 ]
@@ -30,6 +35,7 @@ build-backend = "uv_build"
 # CPU or wrong-CUDA build fails the image rather than every request in it.
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
 # Julia's code ships in its model repo, not on PyPI. Keep this rev equal to
 # jevjam.julia.REVISION, so the code and the weights it loads match.
 supersonic-julia = { git = "https://huggingface.co/SupersonicLabs/Julia-1", rev = "a85b127321d580d65176c89ced8273f305745d85" }

@@ -56,7 +56,7 @@ def test_the_four_tools_are_registered_under_jevjam_names():
 
 def test_a_predict_call_reaches_our_router_and_stamps_the_clock():
     router = StubRouter()
-    _app, built, idle = build_app(router=router, timeout=60, max_loaded=1)
+    _app, built, idle = build_app(router=router, timeout=60)
     assert built.default is router, "the tools and the watcher must share one router"
     assert len(router.hooks) == 1, "the wrapper installs exactly one hook"
 
@@ -102,9 +102,8 @@ def test_a_route_call_alone_does_not_pull_in_a_checkpoint():
     assert router.loads == [], "laya_route promises no forward pass"
 
 
-def test_the_idle_timeout_and_cap_come_from_the_environment(monkeypatch):
+def test_the_idle_timeout_comes_from_the_environment(monkeypatch):
     monkeypatch.setenv("JEVJAM_IDLE_TIMEOUT", "7")
-    monkeypatch.setenv("JEVJAM_MAX_LOADED", "1")
     _app, _router, idle = build_app(router=StubRouter())
     assert idle._timeout == 7, "the MCP server obeys the same clock as the HTTP one"
 
@@ -135,7 +134,7 @@ def test_a_cold_server_holds_nothing_before_the_first_call():
 
 def test_the_api_and_mcp_tools_share_one_router_and_idle_clock():
     router = StubRouter()
-    app, built, idle = build_app(router=router, timeout=60, max_loaded=1)
+    app, built, idle = build_app(router=router, timeout=60)
     assert built.default is router
     assert laya_mcp._ROUTER is built
 

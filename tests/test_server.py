@@ -13,14 +13,12 @@ from fastapi.testclient import TestClient
 
 from jevjam import (
     DEFAULT_IDLE_TIMEOUT,
-    DEFAULT_MAX_LOADED,
     RENAMED_ENV,
     IdleUnloader,
     apply_env,
     build_app,
     build_router,
     read_idle_timeout,
-    read_max_loaded,
     warn_dead_env,
 )
 
@@ -29,6 +27,9 @@ MANAGED_ENV = (
     *("%s_%s" % (prefix, key) for prefix in ("JEVJAM", "LAYA") for key in RENAMED_ENV),
     "LAYA_PRELOAD",
     "LAYA_MODELS",
+    "JEVJAM_MAX_LOADED",
+    "LAYA_MAX_LOADED",
+    "JEVJAM_CLEF_QUANT",
     "LAYA_AUTO_TASK",
     "JULIA_CPU_THREADS",
 )
@@ -114,16 +115,13 @@ class StubRouter:
 # --------------------------------------------------------------------- configuration
 def test_defaults_when_nothing_is_set():
     assert read_idle_timeout() == DEFAULT_IDLE_TIMEOUT == 300
-    assert read_max_loaded() == DEFAULT_MAX_LOADED == 2
 
 
 @pytest.mark.parametrize("blank", ["", "   "])
 def test_a_blank_value_is_the_default_not_an_error(blank, monkeypatch):
     # Compose sends an unset passthrough as an empty string; that must not stop a boot.
     monkeypatch.setenv("JEVJAM_IDLE_TIMEOUT", blank)
-    monkeypatch.setenv("JEVJAM_MAX_LOADED", blank)
     assert read_idle_timeout() == 300
-    assert read_max_loaded() == 2
 
 
 @pytest.mark.parametrize("raw, seconds", [("0", 0), ("1", 1), ("600", 600), (" 600 ", 600)])
@@ -146,22 +144,6 @@ def test_zero_idle_timeout_means_never_sleep(monkeypatch):
     assert read_idle_timeout() == 0
 
 
-@pytest.mark.parametrize("raw, resident", [("1", 1), ("3", 3)])
-def test_max_loaded_is_whole_seconds(raw, resident, monkeypatch):
-    monkeypatch.setenv("JEVJAM_MAX_LOADED", raw)
-    assert read_max_loaded() == resident
-
-
-@pytest.mark.parametrize("raw", ["0", "-1", "1.5", "two"])
-def test_a_bad_max_loaded_stops_the_server(raw, monkeypatch):
-    # 0 is rejected on purpose: laya would silently clamp it to 1, which is the
-    # opposite of what someone asking for "no cap" meant.
-    monkeypatch.setenv("JEVJAM_MAX_LOADED", raw)
-    with pytest.raises(SystemExit) as exit_info:
-        read_max_loaded()
-    assert "JEVJAM_MAX_LOADED" in str(exit_info.value)
-
-
 def test_env_that_no_longer_does_anything_is_called_out(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger="jevjam"):
         warn_dead_env()
@@ -169,11 +151,13 @@ def test_env_that_no_longer_does_anything_is_called_out(monkeypatch, caplog):
 
     monkeypatch.setenv("LAYA_PRELOAD", "1")
     monkeypatch.setenv("LAYA_MODELS", "english")
+    monkeypatch.setenv("JEVJAM_MAX_LOADED", "2")
     with caplog.at_level(logging.WARNING, logger="jevjam"):
         warn_dead_env()
     assert len(caplog.records) == 1
     assert "LAYA_PRELOAD" in caplog.records[0].getMessage()
     assert "LAYA_MODELS" in caplog.records[0].getMessage()
+    assert "JEVJAM_MAX_LOADED" in caplog.records[0].getMessage()
 
 
 def test_a_blank_dead_variable_is_not_worth_a_warning(monkeypatch, caplog):
@@ -247,7 +231,7 @@ def test_stopping_the_server_stops_the_watcher():
 # --------------------------------------------------------------------- request path
 def test_a_request_reaches_the_router_and_stamps_the_clock():
     router = StubRouter()
-    app, built_router, idle = build_app(router=router, timeout=60, max_loaded=1)
+    app, built_router, idle = build_app(router=router, timeout=60, others=[])
     assert built_router.default is router, "the app and the watcher must share one router"
     assert len(router.hooks) == 1, "the wrapper installs exactly one hook"
 
@@ -281,10 +265,10 @@ def test_a_request_that_fails_still_counts_as_activity():
         assert idle.last_activity is not None
 
 
-def test_max_loaded_reaches_the_router(monkeypatch):
+def test_the_router_holds_one_checkpoint(monkeypatch):
     monkeypatch.setenv("LAYA_DEVICE", "cpu")
     monkeypatch.setenv("LAYA_AUTO_TASK", "1")
-    router = build_router(1)
+    router = build_router()
     assert router.max_loaded == 1
     assert router.auto_task_detection is True
     assert router.loaded == [], "a cold server holds nothing"
