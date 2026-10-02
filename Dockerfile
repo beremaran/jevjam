@@ -54,7 +54,7 @@ USER jevjam
 WORKDIR /home/jevjam
 
 # The lockfile on its own layer, so a source change does not re-resolve the wheels.
-COPY --chown=jevjam:jevjam pyproject.toml uv.lock README.md ./
+COPY --chown=jevjam:jevjam pyproject.toml uv.lock README.md LICENSE ./
 COPY --chown=jevjam:jevjam src ./src
 
 # Sync as jevjam rather than root, because uv needs a writable environment and cache.

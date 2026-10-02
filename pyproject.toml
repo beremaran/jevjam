@@ -1,9 +1,30 @@
 [project]
 name = "jevjam"
 version = "0.3.1"
-description = "Jev-compatible HTTP and MCP server for Laya and Julia decision models, with idle checkpoint unloading"
+description = "Self-hosted MCP server and Jev-compatible HTTP API for small decision models (Laya, Julia-1, clef-flash) on one GPU, in Docker"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "src/jevjam/vendor/LICENSE-clef-flash"]
+authors = [{ name = "Berke Arslan" }]
+keywords = [
+    "mcp", "mcp-server", "model-context-protocol", "jev", "classification",
+    "decision-model", "llm-routing", "self-hosted", "docker", "gpu",
+    "huggingface", "transformers", "laya", "julia-1", "clef-flash",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: GPU :: NVIDIA CUDA :: 12",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: Linguistic",
+]
 dependencies = [
     "accelerate>=1.10",     # clef-flash: GPU/CPU split
     "av>=14",               # clef-flash: video decoding
@@ -17,6 +38,13 @@ dependencies = [
     # Cloudflare/clef-flash needs 5.10.2 or later; Laya accepts it too.
     "transformers>=5.10.2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/beremaran/jevjam"
+Documentation = "https://github.com/beremaran/jevjam/tree/main/docs"
+Issues = "https://github.com/beremaran/jevjam/issues"
+Changelog = "https://github.com/beremaran/jevjam/releases"
+Container = "https://github.com/beremaran/jevjam/pkgs/container/jevjam"
 
 [project.scripts]
 jevjam = "jevjam:main"
