@@ -2,7 +2,7 @@
 
 Back to the [README](../README.md).
 
-The HTTP API exposes `/health` and `/v1/systemone`; MCP is available at `/mcp` on the
+The HTTP API exposes `/health`, `/v1/models` and `/v1/systemone`; MCP is available at `/mcp` on the
 same port. `JEVJAM_API_KEY` protects the HTTP API and MCP when set. Keep the published
 port on loopback for local use, or put a TLS reverse proxy in front for remote clients.
 
@@ -17,6 +17,17 @@ resident. An empty `loaded` means cold or asleep; see [Sleeping on idle](configu
 
 That is a server whose last request went to Laya's English checkpoint, and which has
 not gone idle yet.
+
+## `GET /v1/models`
+
+The `model` values `/v1/systemone` accepts, in OpenAI list format. Needs the bearer
+token when `JEVJAM_API_KEY` is set.
+
+```json
+{"object": "list", "data": [{"id": "auto", "object": "model", "owned_by": "jevjam"}, ...]}
+```
+
+The ids are `auto`, `english`, `multilingual`, `typed-decisions`, `julia-1` and `clef-flash`.
 
 ## `POST /v1/systemone`
 

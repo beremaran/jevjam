@@ -8,11 +8,11 @@
     "source": "github"
   },
   "websiteUrl": "https://github.com/beremaran/jevjam",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "ghcr.io/beremaran/jevjam:0.3.2",
+      "identifier": "ghcr.io/beremaran/jevjam:0.3.3",
       "runtimeHint": "docker",
       "transport": {
         "type": "streamable-http",

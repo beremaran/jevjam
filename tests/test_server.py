@@ -251,6 +251,17 @@ def test_a_request_reaches_the_router_and_stamps_the_clock():
         assert client.get("/health").json()["loaded"] == ["english"]
 
 
+def test_models_lists_every_backend_and_honours_the_api_key(monkeypatch):
+    monkeypatch.setenv("JEVJAM_API_KEY", "secret")
+    app, _, _ = build_app(router=StubRouter(), timeout=60)
+    with TestClient(app) as client:
+        assert client.get("/v1/models").status_code == 401
+        listing = client.get("/v1/models", headers={"Authorization": "Bearer secret"}).json()
+    assert listing["object"] == "list"
+    assert [m["id"] for m in listing["data"]] == [
+        "auto", "english", "multilingual", "typed-decisions", "julia-1", "clef-flash"]
+
+
 def test_a_request_that_fails_still_counts_as_activity():
     # Traffic is traffic: a client whose inference keeps failing should not be the
     # reason the server holds GPU memory all day.

@@ -45,6 +45,7 @@ from .models import Julia, ModelUnavailable, Models
 log = logging.getLogger("jevjam")
 
 DEFAULT_IDLE_TIMEOUT = 300  # seconds
+LAYA_MODELS = ("auto", "english", "multilingual", "typed-decisions")
 DEFAULT_PORT = 8000
 
 # Only checked while nothing is resident, so an armed watcher costs nothing and a
@@ -295,7 +296,7 @@ async def _read_capped(request, limit):
 
 
 def add_routes(app, models, api_key):
-    """`GET /health` and laya's `POST /v1/systemone`, for every model.
+    """`GET /health`, `GET /v1/models` and laya's `POST /v1/systemone`, for every model.
 
     Laya's own handler cannot be reused: it drops `images` and `videos`, and caps
     every body at 2 MiB. This one keeps laya's checks, and a request naming
@@ -315,10 +316,19 @@ def add_routes(app, models, api_key):
             "mcp_ready": app.state.mcp_ready,
         }
 
-    @app.post("/v1/systemone")
-    async def systemone(request: Request):
+    def check_bearer(request):
         if api_key and not _valid_bearer(request.headers.get("authorization", ""), api_key):
             raise HTTPException(status_code=401, detail="invalid or missing bearer token")
+
+    @app.get("/v1/models")
+    def list_models(request: Request):
+        check_bearer(request)
+        ids = (*LAYA_MODELS, *(b.name for b in models.others))
+        return {"object": "list", "data": [{"id": i, "object": "model", "owned_by": "jevjam"} for i in ids]}
+
+    @app.post("/v1/systemone")
+    async def systemone(request: Request):
+        check_bearer(request)
         raw = await _read_capped(request, models.largest_body_bytes)
         try:
             body = json.loads(raw)

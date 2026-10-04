@@ -76,7 +76,7 @@ set, the `JEVJAM_*` one wins.
 | `JEVJAM_CLEF_QUANT` | `auto` | How clef-flash loads: `auto` picks the first that fits of `bf16`, `8bit`, `4bit` and `offload` (split across GPU and CPU). Naming one forces it. |
 | `LAYA_AUTO_TASK` | `0` | `1` lets Laya's router reach `typed-decisions` automatically. Laya-only, so it keeps its name. |
 | `JEVJAM_THREADS` | torch default | Caps torch intra-op threads for CPU inference, for every model; keep at or below physical cores. |
-| `JEVJAM_API_KEY` | unset | When set, requests to `/v1/systemone` and `/mcp` must send `Authorization: Bearer <key>`. `GET /health` remains public. |
+| `JEVJAM_API_KEY` | unset | When set, requests to `/v1/models`, `/v1/systemone` and `/mcp` must send `Authorization: Bearer <key>`. `GET /health` remains public. |
 | `JEVJAM_LOG_LEVEL` | `info` | Uvicorn log level, and the level of this server's own log lines. |
 | `HF_HOME` | `/models` | Checkpoint cache location. Mount a volume here. |
 | `HF_TOKEN` | unset | Optional Hugging Face credential. |
